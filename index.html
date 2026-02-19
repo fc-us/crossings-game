@@ -1,0 +1,3978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Crossings</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; display: flex; justify-content: center; align-items: center; min-height: 100vh; overflow: hidden; }
+canvas { image-rendering: pixelated; image-rendering: crisp-edges; max-width: 100vw; max-height: 100vh; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1000" height="500"></canvas>
+<script>
+// ============================================================
+// CROSSINGS — A Mario-style platformer about identity, belonging, and finding home abroad
+// ============================================================
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = 1000, H = 500;
+const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+const BLOCK = 32;
+const WORLD_W = 6000;
+const WORLD_H = H;
+const GROUND_Y = H - BLOCK * 2; // top of ground row
+
+// Colors
+const COL = {
+  sky: '#6B8CFF', skySchool: '#6B8CDF', skyCareer: '#4A6ABF', skyCalling: '#FF9955',
+  brick: '#C84C09', brickDark: '#A03800', brickLight: '#E07030',
+  qblock: '#FAC000', qblockDark: '#C89800', qblockUsed: '#8B6914',
+  ground: '#C84C09', groundDark: '#8B4513',
+  pipe: '#00A800', pipeDark: '#006800',
+  cloud: '#FFFFFF', cloudShadow: '#D0D8FF',
+  hill: '#00A800', hillDark: '#007000',
+  heart: '#FF4466', cross: '#4488FF', globe: '#4488FF', trophy: '#FFD700',
+  enemyOrange: '#FF8800', enemyGreen: '#44BB44', enemyPurple: '#7744AA', enemyGray: 'rgba(150,150,170,0.6)',
+  enemyPink: '#FF88AA', enemyBrown: '#AA7722', enemyTeal: '#22AAAA', enemyCyan: '#00DDFF',
+  hudBg: 'rgba(0,0,0,0.7)', hudHeart: '#FF8844', hudFaith: '#22AAAA', hudMoney: '#44AA44',
+  textWhite: '#FFFFFF', textYellow: '#FAC000',
+};
+
+// Physics
+const GRAVITY = 0.55;
+const JUMP_FORCE = -12.5;
+const MOVE_SPEED = 3.6;
+const MAX_FALL = 12;
+const FRICTION = 0.85;
+const CAMERA_LERP = 0.08;
+const INVINCIBILITY_FRAMES = 60;
+
+// Game states
+const STATE = { MENU: 0, PLAYING: 1, DECISION: 2, END: 3, LEVEL_COMPLETE: 4, PAUSED: 5 };
+
+// ============================================================
+// AUDIO — Chiptune music & SFX via Web Audio API
+// ============================================================
+const Audio = (() => {
+  let actx = null;
+  let musicGain = null;
+  let sfxGain = null;
+  let currentOscs = [];
+  let musicInterval = null;
+  let currentTrack = null;
+  let muted = false;
+
+  function init() {
+    if (actx) return;
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    musicGain = actx.createGain();
+    musicGain.gain.value = 0.15;
+    musicGain.connect(actx.destination);
+    sfxGain = actx.createGain();
+    sfxGain.gain.value = 0.2;
+    sfxGain.connect(actx.destination);
+  }
+
+  // Note frequencies
+  const NOTES = {
+    C3:131,D3:147,E3:165,F3:175,G3:196,A3:220,B3:247,
+    C4:262,D4:294,E4:330,F4:349,G4:392,A4:440,B4:494,
+    C5:523,D5:587,E5:659,F5:698,G5:784,A5:880,B5:988,
+    C6:1047,R:0
+  };
+
+  function playNote(freq, duration, time, type, gain) {
+    if (!actx || freq === 0) return;
+    const osc = actx.createOscillator();
+    const g = actx.createGain();
+    osc.type = type || 'square';
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(gain || 0.15, time);
+    g.gain.exponentialRampToValueAtTime(0.001, time + duration - 0.01);
+    osc.connect(g);
+    g.connect(musicGain);
+    osc.start(time);
+    osc.stop(time + duration);
+    currentOscs.push(osc);
+  }
+
+  function stopMusic() {
+    if (musicInterval) { clearInterval(musicInterval); musicInterval = null; }
+    currentOscs.forEach(o => { try { o.stop(); } catch(e){} });
+    currentOscs = [];
+    currentTrack = null;
+  }
+
+  // Menu theme — hopeful, gentle (think Mario title screen)
+  const menuMelody = [
+    'E4','G4','C5','E5','D5','C5',
+    'G4','A4','B4','C5','R','R',
+    'A4','C5','E5','D5','C5','A4',
+    'G4','E4','F4','G4','R','R',
+    'C5','B4','A4','G4','A4','B4',
+    'C5','E5','D5','C5','R','R',
+    'G4','A4','B4','C5','E5','G5',
+    'E5','D5','C5','R','R','R',
+  ];
+
+  const menuBass = [
+    'C3','C3','E3','E3','F3','F3',
+    'G3','G3','G3','C3','R','R',
+    'F3','F3','A3','A3','F3','F3',
+    'C3','C3','D3','G3','R','R',
+    'A3','A3','F3','G3','F3','G3',
+    'C3','C3','E3','C3','R','R',
+    'G3','G3','G3','C3','C3','E3',
+    'C3','G3','C3','R','R','R',
+  ];
+
+  // Gameplay theme — upbeat, Mario-like (per zone, slightly different tempos)
+  const playMelody = [
+    'C5','C5','R','C5','R','E4','C5','R',
+    'G5','R','R','R','G4','R','R','R',
+    'E5','R','R','G4','R','R','C5','R',
+    'R','A4','R','B4','R','A4','G4','R',
+    'E5','G5','A5','R','F5','G5','R','E5',
+    'R','C5','D5','B4','R','R','R','R',
+    'C5','C5','R','C5','R','E4','C5','R',
+    'G5','R','R','R','G4','R','R','R',
+  ];
+
+  const playBass = [
+    'C3','G3','C3','G3','C3','G3','C3','G3',
+    'G3','D3','G3','D3','G3','D3','G3','D3',
+    'C3','G3','E3','G3','C3','G3','C3','G3',
+    'F3','C3','F3','G3','C3','G3','E3','G3',
+    'C3','E3','F3','E3','D3','E3','F3','C3',
+    'G3','E3','F3','G3','G3','D3','G3','D3',
+    'C3','G3','C3','G3','C3','G3','C3','G3',
+    'G3','D3','G3','D3','G3','D3','G3','D3',
+  ];
+
+  // Calm ending theme
+  const endMelody = [
+    'E4','G4','C5','R','E5','R','D5','C5',
+    'A4','R','C5','R','B4','R','G4','R',
+    'E4','G4','C5','R','E5','R','G5','E5',
+    'C5','R','R','R','R','R','R','R',
+  ];
+
+  const endBass = [
+    'C3','C3','E3','E3','A3','A3','G3','G3',
+    'F3','F3','A3','A3','G3','G3','E3','E3',
+    'C3','C3','E3','E3','A3','A3','C3','C3',
+    'G3','G3','C3','C3','R','R','R','R',
+  ];
+
+  // Level 2 theme — Am pentatonic, introspective (triangle + sine)
+  const playL2Melody = [
+    'A4','R','C5','R','D5','R','E5','R',
+    'C5','R','A4','R','G4','R','R','R',
+    'E5','R','D5','R','C5','R','A4','R',
+    'D5','R','C5','R','A4','R','R','R',
+    'A4','C5','D5','R','E5','R','G5','R',
+    'E5','D5','C5','R','A4','R','R','R',
+    'C5','R','D5','R','E5','R','C5','R',
+    'A4','R','G4','R','A4','R','R','R',
+  ];
+
+  const playL2Bass = [
+    'A3','A3','A3','A3','C3','C3','C3','C3',
+    'D3','D3','D3','D3','E3','E3','E3','E3',
+    'A3','A3','A3','A3','C3','C3','C3','C3',
+    'D3','D3','D3','D3','A3','A3','A3','A3',
+    'A3','A3','C3','C3','D3','D3','E3','E3',
+    'C3','C3','A3','A3','D3','D3','A3','A3',
+    'C3','C3','D3','D3','E3','E3','C3','C3',
+    'A3','A3','G3','G3','A3','A3','A3','A3',
+  ];
+
+  function playTrack(track) {
+    if (!actx) return;
+    if (currentTrack === track) return;
+    stopMusic();
+    currentTrack = track;
+
+    let melody, bass, bpm, melType = 'square', bassType = 'triangle';
+    if (track === 'menu') { melody = menuMelody; bass = menuBass; bpm = 180; }
+    else if (track === 'play') { melody = playMelody; bass = playBass; bpm = 220; }
+    else if (track === 'playL2') { melody = playL2Melody; bass = playL2Bass; bpm = 160; melType = 'triangle'; bassType = 'sine'; }
+    else if (track === 'end') { melody = endMelody; bass = endBass; bpm = 120; }
+    else return;
+
+    const beatLen = 60 / bpm;
+    let idx = 0;
+
+    function scheduleBar() {
+      if (!actx || currentTrack !== track) return;
+      const now = actx.currentTime + 0.05;
+      for (let i = 0; i < melody.length; i++) {
+        const mNote = NOTES[melody[(idx + i) % melody.length]];
+        const bNote = NOTES[bass[(idx + i) % bass.length]];
+        playNote(mNote, beatLen * 0.8, now + i * beatLen, melType, 0.12);
+        playNote(bNote, beatLen * 0.9, now + i * beatLen, bassType, 0.18);
+      }
+      idx = (idx + melody.length) % melody.length;
+    }
+
+    scheduleBar();
+    musicInterval = setInterval(scheduleBar, melody.length * beatLen * 1000);
+  }
+
+  // SFX
+  function sfx(type) {
+    if (!actx) return;
+    const now = actx.currentTime;
+    const osc = actx.createOscillator();
+    const g = actx.createGain();
+    osc.connect(g);
+    g.connect(sfxGain);
+
+    if (type === 'jump') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(400, now);
+      osc.frequency.exponentialRampToValueAtTime(800, now + 0.1);
+      g.gain.setValueAtTime(0.15, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      osc.start(now); osc.stop(now + 0.15);
+    } else if (type === 'coin') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(988, now);
+      osc.frequency.setValueAtTime(1319, now + 0.05);
+      g.gain.setValueAtTime(0.12, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      osc.start(now); osc.stop(now + 0.15);
+    } else if (type === 'hit') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(200, now);
+      osc.frequency.exponentialRampToValueAtTime(80, now + 0.2);
+      g.gain.setValueAtTime(0.15, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      osc.start(now); osc.stop(now + 0.25);
+    } else if (type === 'block') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(523, now);
+      osc.frequency.setValueAtTime(659, now + 0.04);
+      osc.frequency.setValueAtTime(784, now + 0.08);
+      g.gain.setValueAtTime(0.12, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      osc.start(now); osc.stop(now + 0.15);
+    } else if (type === 'decide') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.setValueAtTime(554, now + 0.08);
+      osc.frequency.setValueAtTime(659, now + 0.16);
+      g.gain.setValueAtTime(0.15, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc.start(now); osc.stop(now + 0.3);
+    } else if (type === 'gate') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(262, now);
+      osc.frequency.setValueAtTime(330, now + 0.15);
+      osc.frequency.setValueAtTime(392, now + 0.3);
+      osc.frequency.setValueAtTime(523, now + 0.45);
+      g.gain.setValueAtTime(0.2, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+      osc.start(now); osc.stop(now + 0.7);
+    } else if (type === 'stomp') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(600, now);
+      osc.frequency.exponentialRampToValueAtTime(200, now + 0.08);
+      g.gain.setValueAtTime(0.12, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'silence') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(120, now);
+      osc.frequency.exponentialRampToValueAtTime(60, now + 0.8);
+      g.gain.setValueAtTime(0.15, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+      osc.start(now); osc.stop(now + 0.8);
+    }
+  }
+
+  function toggleMute() {
+    if (!actx) init();
+    muted = !muted;
+    if (musicGain) musicGain.gain.value = muted ? 0 : 0.15;
+    if (sfxGain) sfxGain.gain.value = muted ? 0 : 0.2;
+    if (muted) { stopHeartbeat(); stopAmbient(); }
+  }
+
+  function isMuted() { return muted; }
+
+  // Fade music volume (for gate stillness moment)
+  function fadeMusic(targetVol, seconds) {
+    if (!actx || !musicGain) return;
+    musicGain.gain.linearRampToValueAtTime(muted ? 0 : targetVol, actx.currentTime + seconds);
+  }
+
+  // Heartbeat — subtle low pulse on echo screen
+  let heartbeatInterval = null;
+  let heartbeatGainNode = null;
+  function startHeartbeat(bpm) {
+    if (!actx || muted) return;
+    stopHeartbeat();
+    heartbeatGainNode = actx.createGain();
+    heartbeatGainNode.gain.value = 0.07;
+    heartbeatGainNode.connect(actx.destination);
+    function beat() {
+      if (!actx || !heartbeatGainNode) return;
+      const now = actx.currentTime;
+      // Double-beat like a real heartbeat: lub-dub
+      for (let i = 0; i < 2; i++) {
+        const osc = actx.createOscillator();
+        const g = actx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = i === 0 ? 55 : 44;
+        const t = now + i * 0.12;
+        g.gain.setValueAtTime(i === 0 ? 0.08 : 0.05, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+        osc.connect(g);
+        g.connect(heartbeatGainNode);
+        osc.start(t);
+        osc.stop(t + 0.25);
+      }
+    }
+    beat();
+    heartbeatInterval = setInterval(beat, 60000 / (bpm || 60));
+  }
+  function stopHeartbeat() {
+    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+    if (heartbeatGainNode) { try { heartbeatGainNode.gain.value = 0; } catch(e) {} heartbeatGainNode = null; }
+  }
+
+  // Ambient drone — single oscillator that morphs per zone
+  let ambientOsc = null;
+  let ambientGainNode = null;
+  let currentAmbientKey = -1;
+  function updateAmbient(zone, level) {
+    const key = level * 10 + zone;
+    if (key === currentAmbientKey) return;
+    currentAmbientKey = key;
+    if (!actx || muted) { stopAmbient(); return; }
+    // L2 Zone 3 (ROOTS): silence — the most powerful sound design
+    if (level === 2 && zone === 3) { stopAmbient(); return; }
+    if (!ambientOsc) {
+      ambientOsc = actx.createOscillator();
+      ambientGainNode = actx.createGain();
+      ambientGainNode.gain.value = 0;
+      ambientOsc.connect(ambientGainNode);
+      ambientGainNode.connect(actx.destination);
+      ambientOsc.start();
+    }
+    const profiles = {
+      10: ['sine', 110],    // ARRIVAL: warm low hum
+      11: ['sine', 165],    // CAMPUS: brighter
+      12: ['triangle', 130],// CULTURE: harder edge
+      13: ['sine', 82],     // BELONGING: deep, open
+      20: ['triangle', 73], // HOMESICK: unsettled
+      21: ['sawtooth', 98], // PRESSURE: tense
+      22: ['sine', 147],    // BRIDGE: warm
+    };
+    const p = profiles[key] || ['sine', 100];
+    ambientOsc.type = p[0];
+    ambientOsc.frequency.linearRampToValueAtTime(p[1], actx.currentTime + 1.5);
+    ambientGainNode.gain.linearRampToValueAtTime(0.018, actx.currentTime + 1.0);
+  }
+  function stopAmbient() {
+    if (ambientGainNode) {
+      try { ambientGainNode.gain.linearRampToValueAtTime(0, actx.currentTime + 0.8); } catch(e) {}
+    }
+    currentAmbientKey = -1;
+  }
+
+  return { init, playTrack, stopMusic, sfx, toggleMute, isMuted, fadeMusic, startHeartbeat, stopHeartbeat, updateAmbient, stopAmbient };
+})();
+
+// ============================================================
+// INPUT
+// ============================================================
+const keys = {};
+const justPressed = {};
+window.addEventListener('keydown', e => {
+  Audio.init();
+  if (!keys[e.code]) justPressed[e.code] = true;
+  keys[e.code] = true;
+  // Clipboard must fire from keydown (user gesture) — not requestAnimationFrame
+  if (state === STATE.END && e.code === 'KeyS' && !journalActive) copyJourneySummary();
+  if (state === STATE.END && e.code === 'KeyC' && journalActive) copyJournalPrompts();
+  e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; e.preventDefault(); });
+function consumePress(code) { if (justPressed[code]) { justPressed[code] = false; return true; } return false; }
+function clearJustPressed() { for (let k in justPressed) justPressed[k] = false; }
+
+// Mouse/touch click support for decision buttons
+let clickedOption = null;
+const canvasEl = document.getElementById('game');
+function getCanvasXY(e) {
+  const rect = canvasEl.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const scaleY = H / rect.height;
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+}
+canvasEl.addEventListener('click', e => {
+  Audio.init();
+  const { x, y } = getCanvasXY(e);
+  // Mute button click (top-right HUD area)
+  if ((state === STATE.PLAYING || state === STATE.PAUSED) && y < 40 && x > W - 50) {
+    Audio.toggleMute();
+    return;
+  }
+  if (state === STATE.DECISION && decisionEcho.timer > 0) {
+    // Click to advance echo
+    clickedOption = 'advance';
+  } else if (state === STATE.DECISION && decisionEcho.timer <= 0) {
+    // Check A/B button bounds
+    const pw = 700, ph = 300;
+    const px = (W - pw) / 2, py = (H - ph) / 2;
+    const qi = currentDecision ? currentDecision.currentQ : 0;
+    const q = currentDecision ? currentDecision.questions[qi] : null;
+    if (!q) return;
+    const words = q.question.split(' ');
+    let lines = [], line = '';
+    for (const w of words) { if ((line + ' ' + w).length > 60) { lines.push(line); line = w; } else { line = line ? line + ' ' + w : w; } }
+    if (line) lines.push(line);
+    const optY = py + 58 + lines.length * 20 + 15;
+    const btnW = pw / 2 - 40;
+    if (x >= px + 20 && x <= px + 20 + btnW && y >= optY && y <= optY + 50) {
+      clickedOption = 'A';
+    } else if (x >= px + pw / 2 + 20 && x <= px + pw / 2 + 20 + btnW && y >= optY && y <= optY + 50) {
+      clickedOption = 'B';
+    }
+  } else if (state === STATE.MENU) {
+    // On mobile, tapping near the gender arrows toggles gender instead of starting
+    if (isMobile && y >= 330 && y <= 366 && x >= W / 2 - 60 && x <= W / 2 - 24) {
+      characterGender = characterGender === 0 ? 1 : 0;
+    } else {
+      justPressed['Enter'] = true;
+    }
+  } else if (state === STATE.END) {
+    justPressed['KeyR'] = true;
+  }
+});
+// ---- MOBILE TOUCH CONTROLS ----
+const touchBtns = {
+  left:  { x: 20,  y: 410, w: 70, h: 70, code: 'ArrowLeft' },
+  right: { x: 100, y: 410, w: 70, h: 70, code: 'ArrowRight' },
+  jump:  { x: 890, y: 400, w: 80, h: 80, code: 'ArrowUp' },
+};
+const activeTouches = {}; // touchId -> button name or null
+
+function getCanvasXYFromTouch(touch) {
+  const rect = canvasEl.getBoundingClientRect();
+  return { x: (touch.clientX - rect.left) * (W / rect.width), y: (touch.clientY - rect.top) * (H / rect.height) };
+}
+
+function hitTestTouchBtn(cx, cy) {
+  if (state !== STATE.PLAYING) return null;
+  for (const name in touchBtns) {
+    const b = touchBtns[name];
+    if (cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h) return name;
+  }
+  return null;
+}
+
+function touchBtnCode(name) { return touchBtns[name].code; }
+
+canvasEl.addEventListener('touchstart', e => {
+  e.preventDefault();
+  Audio.init();
+  for (let i = 0; i < e.changedTouches.length; i++) {
+    const t = e.changedTouches[i];
+    const pos = getCanvasXYFromTouch(t);
+    const btn = hitTestTouchBtn(pos.x, pos.y);
+    if (btn) {
+      activeTouches[t.identifier] = btn;
+      keys[touchBtnCode(btn)] = true;
+      justPressed[touchBtnCode(btn)] = true;
+    } else {
+      activeTouches[t.identifier] = null;
+      canvasEl.dispatchEvent(new MouseEvent('click', { clientX: t.clientX, clientY: t.clientY }));
+    }
+  }
+}, { passive: false });
+
+canvasEl.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (let i = 0; i < e.changedTouches.length; i++) {
+    const t = e.changedTouches[i];
+    const pos = getCanvasXYFromTouch(t);
+    const oldBtn = activeTouches[t.identifier];
+    const newBtn = hitTestTouchBtn(pos.x, pos.y);
+    if (oldBtn !== newBtn) {
+      if (oldBtn) {
+        let stillHeld = false;
+        for (const id in activeTouches) { if (id != t.identifier && activeTouches[id] === oldBtn) stillHeld = true; }
+        if (!stillHeld) keys[touchBtnCode(oldBtn)] = false;
+      }
+      if (newBtn) {
+        keys[touchBtnCode(newBtn)] = true;
+        justPressed[touchBtnCode(newBtn)] = true;
+      }
+      activeTouches[t.identifier] = newBtn;
+    }
+  }
+}, { passive: false });
+
+function handleTouchRelease(e) {
+  for (let i = 0; i < e.changedTouches.length; i++) {
+    const t = e.changedTouches[i];
+    const btn = activeTouches[t.identifier];
+    if (btn) {
+      let stillHeld = false;
+      for (const id in activeTouches) { if (id != t.identifier && activeTouches[id] === btn) stillHeld = true; }
+      if (!stillHeld) keys[touchBtnCode(btn)] = false;
+    }
+    delete activeTouches[t.identifier];
+  }
+}
+canvasEl.addEventListener('touchend', handleTouchRelease);
+canvasEl.addEventListener('touchcancel', handleTouchRelease);
+
+// ============================================================
+// LEVEL DATA
+// ============================================================
+
+function buildLevel() {
+  const platforms = [];
+  const groundSegments = [];
+  const questionBlocks = [];
+  const collectibles = [];
+  const enemies = [];
+  const gates = [];
+
+  // Helper: add ground segment (x1 to x2 in pixels)
+  function addGround(x1, x2) {
+    groundSegments.push({ x: x1, y: GROUND_Y, w: x2 - x1, h: BLOCK * 2 });
+  }
+
+  // Helper: add platform (x, y in pixels, width in blocks)
+  function addPlatform(x, y, blocks) {
+    platforms.push({ x, y, w: blocks * BLOCK, h: BLOCK });
+  }
+
+  // Helper: add collectible
+  function addCollectible(type, x, y) {
+    collectibles.push({ type, x, y, w: 14, h: 14, collected: false, bobOffset: Math.random() * Math.PI * 2, sparkle: 0 });
+  }
+
+  // Helper: add enemy
+  function addEnemy(type, x, y, range) {
+    enemies.push({ type, x, y, w: 28, h: 24, startX: x, range, dir: 1, frame: 0, alive: true, deathTimer: 0 });
+  }
+
+  // ---- ZONE 1: ARRIVAL (0-1500) ----
+  addGround(0, 700);
+  addGround(748, 1500);
+
+  addPlatform(200, GROUND_Y - BLOCK * 3, 4);
+  addPlatform(450, GROUND_Y - BLOCK * 2, 3);
+  addPlatform(700, GROUND_Y - BLOCK * 4, 3);
+  addPlatform(950, GROUND_Y - BLOCK * 3, 5);
+  addPlatform(1100, GROUND_Y - BLOCK * 5, 3);
+
+  // Milestone 1 — end of ARRIVAL zone
+  questionBlocks.push({
+    x: 1400, triggerX: 1400, used: false, zone: 0, currentQ: 0, choices: [],
+    verse: '"Every journey begins with a single flight — and a hundred goodbyes."',
+    questions: [
+      { difficulty: 'Easy', question: "Your roommate is from a completely different culture. They play loud music and cook unfamiliar food.",
+        optionA: "Ask to switch rooms", effectA: { heart: 5, faith: -3, money: 3 }, optionB: "Talk to them about it", effectB: { heart: -3, faith: 5, money: -2 },
+        effectS: { heart: -2, faith: -2, money: -3 }, echoA: "You got a quiet room. And a quiet year. You never learned what that music was about — or what you missed.", echoB: "The conversation was awkward. But your roommate taught you to cook their grandmother's recipe. You still make it.", echoS: "You said nothing. The music kept playing. The silence between you grew louder than any song." },
+      { difficulty: 'Hard', question: "Your parents call daily, worried. They want you to come home after one semester.",
+        optionA: "Promise to come home", effectA: { heart: 10, faith: -10, money: 8 }, optionB: "Ask them to trust you", effectB: { heart: -5, faith: 10, money: -5 },
+        effectS: { heart: -10, faith: -10, money: -8 }, echoA: "You went home. Safe, familiar, unchanged. Sometimes you wonder who you would have become.", echoB: "Your mom cried. Your dad went quiet. Six months later, they visited — and saw a person they were proud of.", echoS: "You avoided the call. Then the next one. The distance grew, and it wasn't just geography." },
+    ]
+  });
+
+  // Collectibles Zone 1
+  addCollectible('connection', 150, GROUND_Y - 40);
+  addCollectible('passport', 280, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('connection', 500, GROUND_Y - BLOCK * 2 - 30);
+  addCollectible('passport', 760, GROUND_Y - BLOCK * 4 - 30);
+  addCollectible('connection', 1000, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('passport', 1150, GROUND_Y - BLOCK * 5 - 30);
+
+  // Enemies Zone 1
+  addEnemy('stereotype', 350, GROUND_Y - 24, 120);
+  addEnemy('stereotype', 1050, GROUND_Y - BLOCK * 3 - 24, 100);
+
+  // ---- ZONE 2: CAMPUS (1500-3000) ----
+  addGround(1500, 2100);
+  addGround(2164, 2600);
+  addGround(2664, 3000);
+
+  addPlatform(1600, GROUND_Y - BLOCK * 3, 4);
+  addPlatform(1850, GROUND_Y - BLOCK * 5, 3);
+  addPlatform(2050, GROUND_Y - BLOCK * 2, 3);
+  addPlatform(2250, GROUND_Y - BLOCK * 4, 4);
+  addPlatform(2500, GROUND_Y - BLOCK * 3, 3);
+  addPlatform(2750, GROUND_Y - BLOCK * 5, 3);
+
+  // Milestone 2 — end of CAMPUS zone
+  questionBlocks.push({
+    x: 2900, triggerX: 2900, used: false, zone: 1, currentQ: 0, choices: [],
+    verse: '"The syllabus doesn\'t teach you how to be brave in a new language."',
+    questions: [
+      { difficulty: 'Easy', question: "Professor calls on you in class. Your English isn't perfect. Classmates stare.",
+        optionA: "Stay quiet from now on", effectA: { heart: 3, faith: -3, money: 5 }, optionB: "Keep speaking up", effectB: { heart: -3, faith: 5, money: -3 },
+        effectS: { heart: -2, faith: -2, money: -3 }, echoA: "You kept quiet. Your grades were fine. But something inside went quiet too — the part that had something to say.", echoB: "Your accent didn't disappear. But your ideas started landing. A classmate asked you to study together.", echoS: "The moment passed. You rehearse what you should have said — in the shower, in bed, walking home. The words come easy now. They just don't mean anything anymore." },
+      { difficulty: 'Hard', question: "Group project — teammates ignore your ideas and assign you the easy part.",
+        optionA: "Just do what they say", effectA: { heart: 5, faith: -8, money: 10 }, optionB: "Push for a real role", effectB: { heart: -5, faith: 12, money: -8 },
+        effectS: { heart: -10, faith: -10, money: -8 }, echoA: "You did the easy part. Got a B+. Your name was on a project that had nothing of you in it.", echoB: "It was uncomfortable. They pushed back. But you presented your section, and the professor noticed.", echoS: "You did nothing. The project was fine. You were invisible. That became a pattern." },
+    ]
+  });
+
+  // Collectibles Zone 2
+  addCollectible('passport', 1650, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('globe', 1900, GROUND_Y - BLOCK * 5 - 30);
+  addCollectible('passport', 2100, GROUND_Y - 40);
+  addCollectible('globe', 2300, GROUND_Y - BLOCK * 4 - 30);
+  addCollectible('passport', 2550, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('globe', 2800, GROUND_Y - BLOCK * 5 - 30);
+
+  // Enemies Zone 2
+  addEnemy('bureaucracy', 1700, GROUND_Y - 24, 150);
+  addEnemy('bureaucracy', 2400, GROUND_Y - BLOCK * 4 - 24, 80);
+
+  // ---- ZONE 3: CULTURE (3000-4500) ----
+  addGround(3000, 3450);
+  addGround(3514, 3900);
+  addGround(3964, 4200);
+  addGround(4264, 4500);
+
+  addPlatform(3100, GROUND_Y - BLOCK * 3, 3);
+  addPlatform(3300, GROUND_Y - BLOCK * 5, 4);
+  addPlatform(3550, GROUND_Y - BLOCK * 2, 3);
+  addPlatform(3750, GROUND_Y - BLOCK * 4, 3);
+  addPlatform(3950, GROUND_Y - BLOCK * 3, 4);
+  addPlatform(4150, GROUND_Y - BLOCK * 5, 3);
+  addPlatform(4300, GROUND_Y - BLOCK * 2, 3);
+
+  // Milestone 3 — end of CULTURE zone
+  questionBlocks.push({
+    x: 4400, triggerX: 4400, used: false, zone: 2, currentQ: 0, choices: [],
+    verse: '"Home isn\'t where you\'re from. It\'s where they understand you."',
+    questions: [
+      { difficulty: 'Easy', question: "It's a major holiday from home. Nobody here knows or cares.",
+        optionA: "Celebrate alone in your room", effectA: { heart: 3, faith: -3, money: 5 }, optionB: "Invite classmates to share your tradition", effectB: { heart: -3, faith: 5, money: -3 },
+        effectS: { heart: -2, faith: -2, money: -3 }, echoA: "You lit the candles alone. Scrolled photos from home. The holiday felt like a funeral for the life you left.", echoB: "Three people came. They mispronounced everything. It was the best celebration you'd had in years.", echoS: "The holiday passed unmarked. Another day on the calendar. Another piece of home that faded." },
+      { difficulty: 'Hard', question: "A friend says: 'You should try to be more local. It'll help you fit in.'",
+        optionA: "Adapt to blend in", effectA: { heart: 10, faith: -10, money: 12 }, optionB: "Stay true to your culture", effectB: { heart: -5, faith: 12, money: -10 },
+        effectS: { heart: -10, faith: -10, money: -8 }, echoA: "You changed your clothes, your food, your references. You fit in perfectly. Except you didn't recognize yourself.", echoB: "Some people didn't get it. But the ones who stayed? They loved the real you. That was enough.", echoS: "You smiled and nodded. Neither adapting nor resisting. Just floating — belonging nowhere." },
+    ]
+  });
+
+  // Collectibles Zone 3
+  addCollectible('connection', 3150, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('trophy', 3400, GROUND_Y - BLOCK * 5 - 30);
+  addCollectible('connection', 3600, GROUND_Y - 40);
+  addCollectible('trophy', 3800, GROUND_Y - BLOCK * 4 - 30);
+  addCollectible('connection', 4000, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('trophy', 4350, GROUND_Y - BLOCK * 2 - 30);
+
+  // Enemies Zone 3
+  addEnemy('burnout', 3200, GROUND_Y - 24, 100);
+  addEnemy('burnout', 3700, GROUND_Y - BLOCK * 4 - 24, 80);
+  addEnemy('burnout', 4100, GROUND_Y - 24, 100);
+
+  // ---- ZONE 4: BELONGING (4500-6000) ----
+  addGround(4500, 5200);
+  addGround(5264, 6000);
+
+  addPlatform(4600, GROUND_Y - BLOCK * 3, 4);
+  addPlatform(4850, GROUND_Y - BLOCK * 5, 3);
+  addPlatform(5050, GROUND_Y - BLOCK * 2, 3);
+  addPlatform(5300, GROUND_Y - BLOCK * 4, 4);
+  addPlatform(5500, GROUND_Y - BLOCK * 3, 3);
+
+  // Milestone 4 — end of BELONGING zone
+  questionBlocks.push({
+    x: 5500, triggerX: 5500, used: false, zone: 3, currentQ: 0, choices: [],
+    verse: '"Belonging isn\'t given. It\'s built — one awkward conversation at a time."',
+    questions: [
+      { difficulty: 'Easy', question: "An international student org invites you to lead orientation for new students.",
+        optionA: "Too busy, decline", effectA: { heart: 3, faith: -3, money: 3 }, optionB: "Accept — you remember how lost you felt", effectB: { heart: -3, faith: 5, money: -3 },
+        effectS: { heart: -2, faith: -2, money: -3 }, echoA: "You said no. Someone else did it. The new students found their way. You stayed in yours — alone.", echoB: "That orientation was messy. But a first-year student said: 'Thank you. I thought I was the only one.' Worth it.", echoS: "The email sat in your inbox. You never replied. The org found someone else. You found another evening alone." },
+      { difficulty: 'Hard', question: "You get a summer internship offer back home. Safe, familiar. But there's also one here — scarier, but full of possibility.",
+        optionA: "Go home for summer", effectA: { heart: 8, faith: -8, money: 8 }, optionB: "Stay and take the risk", effectB: { heart: -5, faith: 15, money: -12 },
+        effectS: { heart: -10, faith: -10, money: -8 }, echoA: "Home was warm. Familiar. Nothing changed. You came back the same person who left. That was the problem.", echoB: "The internship was harder than anything you'd done. But the city opened up. You found people. You found yourself.", echoS: "You applied to neither. Summer came and went. You worked a random job. It was fine. Just fine." },
+    ]
+  });
+
+  // Collectibles Zone 4
+  addCollectible('connection', 4650, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('passport', 4900, GROUND_Y - BLOCK * 5 - 30);
+  addCollectible('globe', 5100, GROUND_Y - 40);
+  addCollectible('connection', 5350, GROUND_Y - BLOCK * 4 - 30);
+  addCollectible('passport', 5450, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('globe', 5550, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('trophy', 5650, GROUND_Y - 40);
+  addCollectible('connection', 5750, GROUND_Y - 40);
+
+  // Enemy Zone 4
+  addEnemy('isolation', 4800, GROUND_Y - 24, 140);
+
+  // Gates at end — spaced 200px apart so labels don't overlap
+  gates.push({ x: 5500, y: GROUND_Y - BLOCK * 3, w: BLOCK * 2, h: BLOCK * 3, label: 'Stay in my\nbubble', id: 0, requires: null });
+  gates.push({ x: 5700, y: GROUND_Y - BLOCK * 3, w: BLOCK * 2, h: BLOCK * 3, label: 'Build bridges\nacross cultures', id: 1, requires: { heart: 40, faith: 40 } });
+  gates.push({ x: 5900, y: GROUND_Y - BLOCK * 3, w: BLOCK * 2, h: BLOCK * 3, label: 'Become a\ncultural ambassador', id: 2, requires: { faith: 60 } });
+
+  return { platforms, groundSegments, questionBlocks, collectibles, enemies, gates };
+}
+
+// ============================================================
+// LEVEL 2: INNER JOURNEY
+// ============================================================
+function buildLevel2() {
+  const platforms = [];
+  const groundSegments = [];
+  const questionBlocks = [];
+  const collectibles = [];
+  const enemies = [];
+  const gates = [];
+
+  function addGround(x1, x2) { groundSegments.push({ x: x1, y: GROUND_Y, w: x2 - x1, h: BLOCK * 2 }); }
+  function addPlatform(x, y, blocks) { platforms.push({ x, y, w: blocks * BLOCK, h: BLOCK }); }
+  function addCollectible(type, x, y) { collectibles.push({ type, x, y, w: 14, h: 14, collected: false, bobOffset: Math.random() * Math.PI * 2, sparkle: 0 }); }
+  function addEnemy(type, x, y, range) { enemies.push({ type, x, y, w: 28, h: 24, startX: x, range, dir: 1, frame: 0, alive: true, deathTimer: 0 }); }
+
+  // ---- ZONE 1: HOMESICK (0-1500) ----
+  addGround(0, 600);
+  addGround(664, 1100);
+  addGround(1164, 1500);
+
+  addPlatform(150, GROUND_Y - BLOCK * 3, 3);
+  addPlatform(380, GROUND_Y - BLOCK * 5, 3);
+  addPlatform(550, GROUND_Y - BLOCK * 2, 4);
+  addPlatform(800, GROUND_Y - BLOCK * 4, 3);
+  addPlatform(1050, GROUND_Y - BLOCK * 3, 4);
+  addPlatform(1250, GROUND_Y - BLOCK * 5, 3);
+
+  questionBlocks.push({
+    x: 1400, triggerX: 1400, used: false, zone: 0, currentQ: 0, choices: [],
+    verse: '"Missing home isn\'t weakness. It\'s proof you loved something."',
+    questions: [
+      { difficulty: 'Easy', question: "You scroll photos from home. Everyone's moved on without you.",
+        optionA: "Withdraw and isolate", effectA: { heart: 3, faith: -3, money: 2 }, optionB: "Reach out to someone here", effectB: { heart: -3, faith: 5, money: -1 },
+        effectS: { heart: -2, faith: -2, money: -3 }, echoA: "You stayed in your room for a week. The walls got smaller. The world got quieter. No one knocked.", echoB: "You texted someone from class. Coffee turned into a three-hour conversation. You weren't the only one homesick.", echoS: "You kept scrolling. The algorithm fed you more. Home got further away with every swipe." },
+      { difficulty: 'Hard', question: "'Maybe coming here was a mistake. I don't belong here.'",
+        optionA: "Start planning to transfer home", effectA: { heart: 8, faith: -10, money: 5 }, optionB: "Give it one more semester", effectB: { heart: -3, faith: 10, money: -3 },
+        effectS: { heart: -10, faith: -10, money: -8 }, echoA: "You went home. The relief was instant. The regret took longer. It arrived around November, quiet and permanent.", echoB: "One more semester became the semester everything changed. Not because it got easier — because you got stronger.", echoS: "You told nobody. The thought rotted quietly. By spring, it had eaten through everything." },
+    ]
+  });
+
+  addCollectible('passport', 200, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('connection', 420, GROUND_Y - BLOCK * 5 - 30);
+  addCollectible('passport', 700, GROUND_Y - 40);
+  addCollectible('connection', 900, GROUND_Y - BLOCK * 4 - 30);
+  addCollectible('globe', 1100, GROUND_Y - 40);
+  addCollectible('passport', 1300, GROUND_Y - BLOCK * 5 - 30);
+
+  addEnemy('homesick', 300, GROUND_Y - 24, 120);
+  addEnemy('homesick', 950, GROUND_Y - BLOCK * 3 - 24, 90);
+
+  // ---- ZONE 2: PRESSURE (1500-3000) ----
+  addGround(1500, 1950);
+  addGround(2014, 2500);
+  addGround(2564, 3000);
+
+  addPlatform(1550, GROUND_Y - BLOCK * 3, 3);
+  addPlatform(1750, GROUND_Y - BLOCK * 5, 4);
+  addPlatform(2000, GROUND_Y - BLOCK * 2, 3);
+  addPlatform(2200, GROUND_Y - BLOCK * 4, 3);
+  addPlatform(2450, GROUND_Y - BLOCK * 6, 3);
+  addPlatform(2650, GROUND_Y - BLOCK * 3, 4);
+  addPlatform(2850, GROUND_Y - BLOCK * 5, 3);
+
+  questionBlocks.push({
+    x: 2900, triggerX: 2900, used: false, zone: 1, currentQ: 0, choices: [],
+    verse: '"The weight you carry was never meant to be carried alone."',
+    questions: [
+      { difficulty: 'Easy', question: "Your visa requires maintaining a 3.0 GPA. You're at 2.8. Final exams are next week.",
+        optionA: "Panic-study alone", effectA: { heart: 3, faith: -3, money: 5 }, optionB: "Ask for help — tutoring, professor office hours", effectB: { heart: -3, faith: 5, money: -5 },
+        effectS: { heart: -2, faith: -2, money: -5 }, echoA: "You studied until 4am every night. Made the 3.0. Barely. Your health didn't recover as fast as your GPA.", echoB: "The professor remembered your name. The tutor became a friend. The 3.0 came — and something better with it.", echoS: "You stared at the books. Opened Instagram. Stared at the books again. The exam came. The 2.8 stayed." },
+      { difficulty: 'Hard', question: "Your family sacrificed everything to send you here. They expect you to send money home.",
+        optionA: "Get a second job, skip sleep", effectA: { heart: 10, faith: -8, money: 12 }, optionB: "Be honest about your limits", effectB: { heart: -5, faith: 12, money: -10 },
+        effectS: { heart: -10, faith: -10, money: -10 }, echoA: "The money arrived on time. Your grades didn't. Your body started keeping score of every hour you stole from it.", echoB: "The conversation was the hardest one you'd ever had. Your mom cried. Then she said: 'We didn't send you there to break.'", echoS: "You sent what you could. Said nothing about the rest. The gap grew. So did the guilt." },
+    ]
+  });
+
+  addCollectible('connection', 1600, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('trophy', 1850, GROUND_Y - BLOCK * 5 - 30);
+  addCollectible('passport', 2100, GROUND_Y - 40);
+  addCollectible('globe', 2300, GROUND_Y - BLOCK * 4 - 30);
+  addCollectible('connection', 2500, GROUND_Y - BLOCK * 6 - 30);
+  addCollectible('passport', 2750, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('trophy', 2900, GROUND_Y - BLOCK * 5 - 30);
+
+  addEnemy('visa', 1700, GROUND_Y - 24, 130);
+  addEnemy('imposter', 2300, GROUND_Y - BLOCK * 4 - 24, 80);
+  addEnemy('visa', 2700, GROUND_Y - 24, 100);
+
+  // ---- ZONE 3: BRIDGE (3000-4500) ----
+  addGround(3000, 3500);
+  addGround(3564, 3950);
+  addGround(4014, 4500);
+
+  addPlatform(3100, GROUND_Y - BLOCK * 3, 4);
+  addPlatform(3350, GROUND_Y - BLOCK * 5, 3);
+  addPlatform(3600, GROUND_Y - BLOCK * 2, 3);
+  addPlatform(3800, GROUND_Y - BLOCK * 4, 4);
+  addPlatform(4050, GROUND_Y - BLOCK * 3, 3);
+  addPlatform(4250, GROUND_Y - BLOCK * 5, 4);
+
+  questionBlocks.push({
+    x: 4400, triggerX: 4400, used: false, zone: 2, currentQ: 0, choices: [],
+    verse: '"A bridge belongs to both sides. That\'s its power."',
+    questions: [
+      { difficulty: 'Easy', question: "Your local friends make a joke about your country. They don't mean harm.",
+        optionA: "Laugh it off, say nothing", effectA: { heart: 3, faith: -3, money: 3 }, optionB: "Gently explain why it stings", effectB: { heart: -3, faith: 5, money: -2 },
+        effectS: { heart: -2, faith: -2, money: -3 }, echoA: "You laughed. They laughed harder. The jokes got worse. Eventually, your country became a punchline.", echoB: "The table went quiet. Then someone said, 'I didn't know. I'm sorry.' The friendship deepened that day.", echoS: "You said nothing. The joke hung in the air. It's still hanging there, months later, every time you see them." },
+      { difficulty: 'Hard', question: "Your co-national friends say you've 'become too Western.' Your local friends say you're 'hard to read.'",
+        optionA: "Pick one group", effectA: { heart: 10, faith: -5, money: 8 }, optionB: "Hold both — be the bridge", effectB: { heart: -5, faith: 10, money: -5 },
+        effectS: { heart: -10, faith: -10, money: -8 }, echoA: "You picked a side. It was easier. But half of who you are went quiet. And quiet things eventually disappear.", echoB: "It was exhausting. Both sides misunderstood you. But slowly, they started understanding each other — through you.", echoS: "You pulled away from everyone. Neither group. Neither world. The loneliness was total." },
+    ]
+  });
+
+  addCollectible('connection', 3150, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('globe', 3400, GROUND_Y - BLOCK * 5 - 30);
+  addCollectible('passport', 3650, GROUND_Y - 40);
+  addCollectible('connection', 3900, GROUND_Y - BLOCK * 4 - 30);
+  addCollectible('globe', 4100, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('passport', 4300, GROUND_Y - BLOCK * 5 - 30);
+  addCollectible('connection', 4450, GROUND_Y - 40);
+
+  addEnemy('assimilate', 3250, GROUND_Y - 24, 110);
+  addEnemy('imposter', 3750, GROUND_Y - BLOCK * 4 - 24, 90);
+
+  // ---- ZONE 4: ROOTS (4500-6000) ----
+  addGround(4500, 5100);
+  addGround(5164, 6000);
+
+  addPlatform(4600, GROUND_Y - BLOCK * 3, 3);
+  addPlatform(4850, GROUND_Y - BLOCK * 5, 4);
+  addPlatform(5100, GROUND_Y - BLOCK * 2, 3);
+  addPlatform(5350, GROUND_Y - BLOCK * 4, 3);
+  addPlatform(5550, GROUND_Y - BLOCK * 3, 4);
+
+  questionBlocks.push({
+    x: 5500, triggerX: 5500, used: false, zone: 3, currentQ: 0, choices: [],
+    verse: '"You don\'t lose your roots by growing new branches."',
+    questions: [
+      { difficulty: 'Easy', question: "Graduation is approaching. A company offers sponsorship. It means staying.",
+        optionA: "Take it — it's safe", effectA: { heart: 3, faith: -3, money: 2 }, optionB: "Take time to decide what you actually want", effectB: { heart: -3, faith: 5, money: -3 },
+        effectS: { heart: -2, faith: -2, money: -3 }, echoA: "You took the offer. The visa was secured. But 'safe' started feeling like a cage you chose to enter.", echoB: "You turned it down. The uncertainty was terrifying. But when the right thing came, you were free to say yes.", echoS: "The deadline passed. The offer expired. You had neither safety nor freedom — just regret." },
+      { difficulty: 'Hard', question: "You realize you're not the same person who arrived. Home feels foreign now too.",
+        optionA: "That's loss — grieve it", effectA: { heart: 8, faith: -8, money: 5 }, optionB: "That's growth — own it", effectB: { heart: -5, faith: 15, money: -8 },
+        effectS: { heart: -10, faith: -10, money: -8 }, echoA: "You grieved. For the person you were, the home that changed, the belonging that no longer fit. It was necessary.", echoB: "You stood between two worlds and realized: you weren't lost. You were the bridge. That was always the point.", echoS: "You felt it but couldn't name it. The dissonance stayed, humming quietly under every conversation, every flight home." },
+    ]
+  });
+
+  addCollectible('passport', 4650, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('globe', 4900, GROUND_Y - BLOCK * 5 - 30);
+  addCollectible('connection', 5150, GROUND_Y - 40);
+  addCollectible('passport', 5400, GROUND_Y - BLOCK * 4 - 30);
+  addCollectible('globe', 5550, GROUND_Y - BLOCK * 3 - 30);
+  addCollectible('connection', 5700, GROUND_Y - 40);
+  addCollectible('trophy', 5750, GROUND_Y - BLOCK * 3 - 30);
+
+  addEnemy('assimilate', 4750, GROUND_Y - 24, 120);
+  addEnemy('homesick', 5300, GROUND_Y - BLOCK * 4 - 24, 80);
+
+  // End gates — spaced 200px apart so labels don't overlap
+  gates.push({ x: 5500, y: GROUND_Y - BLOCK * 3, w: BLOCK * 2, h: BLOCK * 3, label: 'Go back\nhome early', id: 0, requires: null });
+  gates.push({ x: 5700, y: GROUND_Y - BLOCK * 3, w: BLOCK * 2, h: BLOCK * 3, label: 'Graduate &\nstay connected', id: 1, requires: { heart: 40, faith: 40 } });
+  gates.push({ x: 5900, y: GROUND_Y - BLOCK * 3, w: BLOCK * 2, h: BLOCK * 3, label: 'Bridge two\nworlds forever', id: 2, requires: { faith: 60 } });
+
+  return { platforms, groundSegments, questionBlocks, collectibles, enemies, gates };
+}
+
+function startLevel2() {
+  currentLevel = 2;
+  state = STATE.PLAYING;
+  level = buildLevel2();
+  currentDecision = null;
+  frameCount = 0;
+  decisionTimer = 0;
+  decisionEcho = { text: '', timer: 0, choice: '' };
+  player = {
+    x: 60, y: GROUND_Y - 42, w: 30, h: 42,
+    vx: 0, vy: 0, grounded: false, facing: 1,
+    invincible: 0, lastSafeX: 60, lastSafeY: GROUND_Y - 42,
+    walkFrame: 0, walkTimer: 0
+  };
+  camera = { x: 0 };
+  Audio.playTrack('playL2');
+  lastZone = -1;
+  zoneQuote = { text: '', timer: 0 };
+  gauntletIntro = { active: false, timer: 0 };
+  fadeTransition = { alpha: 1 };
+  lifeBoundary = 0;
+  lifeBoundaryMsg = { text: '', timer: 0, shown: false };
+  pitChallengeMsg = { text: '', timer: 0 };
+  decisionSlowmo = 0;
+  pendingEcho = null;
+  footprints = [];
+  gateStillness = { triggered: false, timer: 0 };
+  Audio.stopHeartbeat();
+  Audio.stopAmbient();
+  shadowPlayback = [...shadowRecording];
+  shadowFrame = 0;
+  gauntlet = { active: false, wallX: 0, timedDecisions: [
+    { question: "I belong here — even when I feel invisible.", optA: "I need to earn my place", optB: "My presence is enough", chosen: null, timer: 300 },
+    { question: "My culture is not a costume — it's my strength.", optA: "Blend in to survive", optB: "Stand out to thrive", chosen: null, timer: 300 },
+    { question: "I will build bridges — even when it's easier to retreat.", optA: "Stay with what's familiar", optB: "Reach across the gap", chosen: null, timer: 300 },
+  ], currentTD: -1, tdTimer: 0, complete: false };
+}
+
+const ZONE_NAMES_L2 = ['HOMESICK', 'PRESSURE', 'BRIDGE', 'ROOTS'];
+
+// ============================================================
+// CLOUD / BACKGROUND DATA
+// ============================================================
+const clouds = [];
+for (let i = 0; i < 30; i++) {
+  clouds.push({
+    x: Math.random() * WORLD_W * 1.2,
+    y: 30 + Math.random() * 120,
+    w: 50 + Math.random() * 80,
+    speed: 0.1 + Math.random() * 0.2,
+    layer: Math.random() < 0.5 ? 0 : 1
+  });
+}
+
+const hills = [];
+for (let i = 0; i < 20; i++) {
+  hills.push({
+    x: i * 350 + Math.random() * 100,
+    w: 120 + Math.random() * 100,
+    h: 40 + Math.random() * 50
+  });
+}
+
+// ============================================================
+// GAME STATE
+// ============================================================
+let state, player, camera, level, heart, faith, money, trophyCount, decisions, currentDecision, endGate, frameCount, currentLevel, levelCompleteTimer;
+
+// --- New systems ---
+let particles = [];
+let scorePopups = [];
+let screenShake = { frames: 0, intensity: 0 };
+let coyoteTimer = 0, jumpBuffer = 0;
+let zoneQuote = { text: '', timer: 0 };
+let lastZone = -1;
+let shadowRecording = [];
+let shadowPlayback = [];
+let l1Decisions = [];
+let shadowFrame = 0;
+let gauntlet = { active: false, wallX: 0, timedDecisions: [], currentTD: -1, tdTimer: 0, complete: false };
+
+const ZONE_QUOTES_L1 = [
+  "Every journey begins with a single flight — and a hundred goodbyes.",
+  "The syllabus doesn't teach you how to be brave in a new language.",
+  "Home isn't where you're from. It's where they understand you.",
+  "Belonging isn't given. It's built — one awkward conversation at a time."
+];
+const ZONE_QUOTES_L2 = [
+  "Missing home isn't weakness. It's proof you loved something.",
+  "The weight you carry was never meant to be carried alone.",
+  "A bridge belongs to both sides. That's its power.",
+  "You don't lose your roots by growing new branches."
+];
+
+// Random life events — things outside your control
+const LIFE_EVENTS = [
+  { text: "Your student visa renewal hits a snag. Weeks of uncertainty.", effect: { heart: -8, faith: 0 }, color: '#FF6666' },
+  { text: "A care package arrives from home. You cry in the mailroom.", effect: { heart: 5, faith: 3 }, color: '#44DD44' },
+  { text: "Your professor writes you a recommendation. They see your potential.", effect: { heart: 0, faith: 5 }, color: '#66AAFF' },
+  { text: "Exchange rate crashes. Your savings shrink overnight.", effect: { heart: -5, faith: -3 }, color: '#FF8844' },
+  { text: "A local family invites you to Thanksgiving. You feel seen.", effect: { heart: 5, faith: 3 }, color: '#FFDD44' },
+  { text: "Your best friend from home stops replying. Distance grows.", effect: { heart: -5, faith: -2 }, color: '#8888AA' },
+  { text: "You cook your mom's recipe. The whole floor shows up.", effect: { heart: 3, faith: 5 }, color: '#FFDD44' },
+  { text: "Your laptop dies before finals. Panic.", effect: { heart: -3, faith: -3 }, color: '#FF6666' },
+  { text: "Someone asks where you're 'really' from. Again.", effect: { heart: -5, faith: -3 }, color: '#AA66AA' },
+  { text: "You dream in your second language for the first time.", effect: { heart: 3, faith: 8 }, color: '#66AAFF' },
+];
+let lifeEvent = { text: '', timer: 0, color: '#FFF' };
+let usedLifeEvents = [];
+let silenceCount = 0;
+let decisionTimer = 0;
+let decisionEcho = { text: '', timer: 0, choice: '' };
+let journalActive = false;
+let meterDelta = { heart: 0, faith: 0, money: 0, timer: 0 };
+let pausedFrom = null;
+let gauntletIntro = { active: false, timer: 0 };
+let restartConfirm = false;
+let fadeTransition = { alpha: 0 };
+let copyFeedback = { text: '', timer: 0 };
+let lifeBoundary = 0;
+let lifeBoundaryMsg = { text: '', timer: 0, shown: false };
+let pitChallengeMsg = { text: '', timer: 0 };
+const PIT_CHALLENGES_L1 = [
+  'Failed visa interview', 'Missed flight home', 'Language barrier', 'Culture shock',
+  'Lost scholarship', 'Pandemic travel ban', 'Racist encounter'
+];
+const PIT_CHALLENGES_L2 = [
+  'Panic attack', 'Crippling homesickness', 'Friendship breakup', 'Identity crisis',
+  'Academic probation', 'Travel ban', 'Imposter syndrome'
+];
+let decisionSlowmo = 0;
+let pendingEcho = null;
+let footprints = [];
+let gateStillness = { triggered: false, timer: 0 };
+
+// Player name selection
+const PLAYER_NAMES_BOY = ['Wei', 'Ravi', 'Yuki', 'Carlos', 'Amir', 'Kofi'];
+const PLAYER_NAMES_GIRL = ['Mei', 'Priya', 'Yuki', 'Sofia', 'Amara', 'Hana'];
+function getPlayerNames() { return characterGender === 1 ? PLAYER_NAMES_GIRL : PLAYER_NAMES_BOY; }
+let playerNameIdx = 0;
+
+// Character skin options
+const CHARACTER_SKINS = [
+  { skin: '#FFD1A4', hair: '#1A1A2E', name: 'Light' },
+  { skin: '#C68642', hair: '#3B2314', name: 'Medium' },
+  { skin: '#8D5524', hair: '#1C1008', name: 'Dark' },
+];
+let characterSkin = 0;
+let characterGender = 0; // 0 = boy, 1 = girl
+
+function triggerLifeEvent() {
+  const available = LIFE_EVENTS.filter((_, i) => !usedLifeEvents.includes(i));
+  if (available.length === 0) { usedLifeEvents = []; return; }
+  const idx = LIFE_EVENTS.indexOf(available[Math.floor(Math.random() * available.length)]);
+  usedLifeEvents.push(idx);
+  const ev = LIFE_EVENTS[idx];
+  heart = Math.max(0, Math.min(100, heart + ev.effect.heart));
+  faith = Math.max(0, Math.min(100, faith + ev.effect.faith));
+  lifeEvent = { text: ev.text, timer: 180, color: ev.color };
+  if (ev.effect.heart < 0 || ev.effect.faith < 0) {
+    screenShake = { frames: 6, intensity: 2 };
+  }
+}
+
+function spawnParticles(x, y, count, color, opts) {
+  opts = opts || {};
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * (opts.spread || 4),
+      vy: (Math.random() - 1) * (opts.upward || 3) - (opts.lift || 0),
+      life: (opts.life || 20) + Math.random() * 10,
+      maxLife: (opts.life || 20) + 10,
+      color: color,
+      size: opts.size || (2 + Math.random() * 2)
+    });
+  }
+}
+
+function addScorePopup(text, x, y, color) {
+  scorePopups.push({ text, x, y, vy: -1.5, life: 45, color: color || '#FFF' });
+}
+
+function copyJourneySummary() {
+  const gateNames = ['Went back home early', 'Graduated & stayed connected', 'Bridge two worlds forever'];
+  const gateName = endGate ? gateNames[endGate.id] : 'Unknown';
+  const aCount = decisions.filter(d => d.choice === 'A').length;
+  const bCount = decisions.filter(d => d.choice === 'B').length;
+  const sCount = decisions.filter(d => d.choice === 'S').length;
+  const text = 'CROSSINGS — ' + getPlayerNames()[playerNameIdx] + '\'s Journey\n\nConnection: ' + Math.round(heart) + '% | Identity: ' + Math.round(faith) + '% | Resources: ' + Math.round(money) + '%\nGate: ' + gateName + '\nChoices: ' + aCount + ' safe, ' + bCount + ' brave, ' + sCount + ' silence\n\nPlay at crossings-game.pages.dev';
+  navigator.clipboard.writeText(text).then(() => {
+    copyFeedback = { text: 'Copied to clipboard!', timer: 150 };
+  }).catch(() => { copyFeedback = { text: 'Copy failed — use HTTPS', timer: 150 }; });
+}
+
+function copyJournalPrompts() {
+  let prompts = [];
+  const aChoices = decisions.filter(d => d.choice === 'A').length;
+  const bChoices = decisions.filter(d => d.choice === 'B').length;
+  const sChoices = decisions.filter(d => d.choice === 'S').length;
+  const hardChoices = decisions.filter(d => d.difficulty === 'Hard');
+  const hardSafe = hardChoices.filter(d => d.choice === 'A').length;
+  const gateId = endGate ? endGate.id : 1;
+  if (sChoices >= 3) prompts.push('You stayed silent ' + sChoices + ' times. What decision in your real life are you avoiding right now?');
+  else if (sChoices >= 1) prompts.push('You let the timer run out ' + sChoices + ' time' + (sChoices > 1 ? 's' : '') + '. Is there something you\'re waiting to feel \'ready\' for?');
+  if (aChoices > bChoices + 3) prompts.push('You chose security over risk most of the time. What would you do if you knew you couldn\'t fail?');
+  else if (bChoices > aChoices + 3) prompts.push('You chose courage repeatedly. What\'s one area of your life where you\'re still holding back?');
+  else prompts.push('Your choices were mixed — sometimes safe, sometimes bold. What pattern do you see in your real decisions?');
+  if (hardSafe >= 3) prompts.push('On the hardest questions, you played it safe. What would \'trusting the process\' look like for you this week?');
+  else if (hardSafe === 0 && hardChoices.length > 0) prompts.push('You chose courage on every hard question. Where did that courage come from — and where do you need it next?');
+  if (gateId === 0) prompts.push('You chose comfort. Is there a dream you\'ve shelved because the cost felt too high?');
+  else if (gateId === 2) prompts.push('You chose to bridge two worlds. If that were literally true tomorrow, what would you need to let go of?');
+  prompts = prompts.slice(0, 3);
+  if (prompts.length === 0) prompts.push('What surprised you most about the choices you made?');
+  const text = 'CROSSINGS — Personal Reflection\n\n' + prompts.map((p, i) => (i + 1) + '. ' + p).join('\n\n');
+  navigator.clipboard.writeText(text).then(() => {
+    copyFeedback = { text: 'Copied to clipboard!', timer: 150 };
+  }).catch(() => { copyFeedback = { text: 'Copy failed — use HTTPS', timer: 150 }; });
+}
+
+function initGame() {
+  state = STATE.MENU;
+  frameCount = 0;
+  currentLevel = 1;
+  Audio.playTrack('menu');
+}
+
+function startGame() {
+  state = STATE.PLAYING;
+  currentLevel = 1;
+  Audio.playTrack('play');
+  level = buildLevel();
+  heart = 50;
+  faith = 50;
+  money = 30;
+  trophyCount = 0;
+  decisions = [];
+  currentDecision = null;
+  endGate = null;
+  frameCount = 0;
+  levelCompleteTimer = 0;
+  particles = [];
+  scorePopups = [];
+  screenShake = { frames: 0, intensity: 0 };
+  coyoteTimer = 0;
+  jumpBuffer = 0;
+  lastZone = -1;
+  zoneQuote = { text: '', timer: 0 };
+  shadowRecording = [];
+  shadowPlayback = [];
+  l1Decisions = [];
+  shadowFrame = 0;
+  gauntlet = { active: false, wallX: 0, timedDecisions: [], currentTD: -1, tdTimer: 0, complete: false };
+  silenceCount = 0;
+  decisionTimer = 0;
+  decisionEcho = { text: '', timer: 0, choice: '' };
+  journalActive = false;
+  meterDelta = { heart: 0, faith: 0, money: 0, timer: 0 };
+  gauntletIntro = { active: false, timer: 0 };
+  restartConfirm = false;
+  copyFeedback = { text: '', timer: 0 };
+  pausedFrom = null;
+  fadeTransition = { alpha: 1 };
+  lifeBoundary = 0;
+  lifeBoundaryMsg = { text: '', timer: 0, shown: false };
+  pitChallengeMsg = { text: '', timer: 0 };
+  decisionSlowmo = 0;
+  pendingEcho = null;
+  footprints = [];
+  gateStillness = { triggered: false, timer: 0 };
+  Audio.stopHeartbeat();
+  Audio.stopAmbient();
+  player = {
+    x: 60, y: GROUND_Y - 42, w: 30, h: 42,
+    vx: 0, vy: 0, grounded: false, facing: 1,
+    invincible: 0, lastSafeX: 60, lastSafeY: GROUND_Y - 42,
+    walkFrame: 0, walkTimer: 0
+  };
+  camera = { x: 0 };
+}
+
+initGame();
+
+// ============================================================
+// ZONE HELPERS
+// ============================================================
+function getZone(x) {
+  if (x < 1500) return 0;
+  if (x < 3000) return 1;
+  if (x < 4500) return 2;
+  return 3;
+}
+const ZONE_NAMES = ['ARRIVAL', 'CAMPUS', 'CULTURE', 'BELONGING'];
+
+function getSkyColor(x) {
+  const z = getZone(x);
+  if (z === 0) return COL.sky;
+  if (z === 1) return COL.skySchool;
+  if (z === 2) return COL.skyCareer;
+  return COL.skyCalling;
+}
+
+// ============================================================
+// COLLISION
+// ============================================================
+function aabb(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function getAllSolids() {
+  return [...level.groundSegments, ...level.platforms];
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+function update() {
+  // Pause toggle (works in PLAYING, DECISION echo, and PAUSED)
+  if (consumePress('Escape') || consumePress('KeyP')) {
+    if (state === STATE.PLAYING) {
+      pausedFrom = STATE.PLAYING;
+      state = STATE.PAUSED;
+      clearJustPressed();
+      return;
+    } else if (state === STATE.DECISION && decisionEcho.timer > 0) {
+      pausedFrom = STATE.DECISION;
+      state = STATE.PAUSED;
+      clearJustPressed();
+      return;
+    } else if (state === STATE.PAUSED) {
+      state = pausedFrom || STATE.PLAYING;
+      pausedFrom = null;
+      clearJustPressed();
+      return;
+    }
+  }
+
+  // Mute toggle (works in any state)
+  if (consumePress('KeyM')) {
+    Audio.toggleMute();
+  }
+
+  if (state === STATE.PAUSED) {
+    clearJustPressed();
+    return;
+  }
+
+  if (state === STATE.MENU) {
+    frameCount++;
+    if (consumePress('ArrowUp') || consumePress('ArrowDown')) characterGender = characterGender === 0 ? 1 : 0;
+    if (consumePress('Enter')) startGame();
+    clearJustPressed();
+    return;
+  }
+
+  if (state === STATE.LEVEL_COMPLETE) {
+    frameCount++;
+    levelCompleteTimer++;
+    if (levelCompleteTimer > 60 && consumePress('Enter')) { startLevel2(); }
+    clearJustPressed();
+    return;
+  }
+
+  if (state === STATE.END) {
+    frameCount++;
+    if (consumePress('KeyR')) {
+      if (journalActive) {
+        if (restartConfirm) {
+          restartConfirm = false;
+          journalActive = false;
+          startGame();
+        } else {
+          restartConfirm = true;
+        }
+      } else {
+        journalActive = true;
+      }
+    }
+    if (restartConfirm && consumePress('KeyN')) {
+      restartConfirm = false;
+    }
+    // S/C clipboard handled in keydown for user-gesture requirement
+    if (copyFeedback.timer > 0) copyFeedback.timer--;
+    clearJustPressed();
+    return;
+  }
+
+  if (state === STATE.DECISION) {
+    // Slow-mo phase: world visible, darkening, before echo appears
+    if (decisionSlowmo > 0) {
+      decisionSlowmo--;
+      frameCount++; // keep animations alive (slowly)
+      if (decisionSlowmo <= 0 && pendingEcho) {
+        decisionEcho = pendingEcho;
+        pendingEcho = null;
+        // Start heartbeat — rate varies by choice
+        const bpm = decisionEcho.choice === 'S' ? 40 : decisionEcho.choice === 'B' ? 70 : 55;
+        Audio.startHeartbeat(bpm);
+      }
+      clearJustPressed();
+      return;
+    }
+    if (decisionEcho.timer > 0) {
+      decisionEcho.timer--;
+      if (meterDelta.timer > 0) meterDelta.timer--;
+      // Let user advance early (but not instantly — require at least 1 sec to read)
+      if (decisionEcho.timer < (decisionEcho.choice === 'S' ? 240 : 180) && (consumePress('Enter') || consumePress('Space') || consumePress('KeyA') || consumePress('KeyB') || clickedOption === 'advance')) {
+        decisionEcho.timer = 0;
+        clickedOption = null;
+      }
+      if (decisionEcho.timer <= 0) {
+        Audio.stopHeartbeat();
+        currentDecision.currentQ++;
+        if (currentDecision.currentQ >= currentDecision.questions.length) {
+          state = STATE.PLAYING;
+          // After a decision, life really moves on — tighten the boundary
+          lifeBoundary = Math.max(lifeBoundary, player.x - 100);
+        } else {
+          decisionTimer = 480;
+        }
+      }
+    } else {
+      const q = currentDecision.questions[currentDecision.currentQ];
+      decisionTimer--;
+      // Decisiveness bonus: answer quickly → negative effects reduced (30%-100% scale)
+      const hesitation = 1 - decisionTimer / 480; // 0 = instant, 1 = last second
+      const penalty = 0.3 + 0.7 * hesitation; // 30% penalty if instant, 100% if slow
+      function applyEffect(eff) {
+        const h = eff.heart >= 0 ? eff.heart : Math.round(eff.heart * penalty);
+        const f = eff.faith >= 0 ? eff.faith : Math.round(eff.faith * penalty);
+        const m = (eff.money || 0) >= 0 ? (eff.money || 0) : Math.round((eff.money || 0) * penalty);
+        heart = Math.max(0, Math.min(100, heart + h));
+        faith = Math.max(0, Math.min(100, faith + f));
+        money = Math.max(0, Math.min(100, money + m));
+      }
+      const pickA = consumePress('KeyA') || clickedOption === 'A';
+      const pickB = consumePress('KeyB') || clickedOption === 'B';
+      clickedOption = null;
+      if (pickA) {
+        const prevH = heart, prevF = faith, prevM = money;
+        applyEffect(q.effectA);
+        meterDelta = { heart: heart - prevH, faith: faith - prevF, money: money - prevM, timer: 120 };
+        currentDecision.choices.push('A');
+        decisions.push({ question: q.question, choice: 'A', text: q.optionA, difficulty: q.difficulty });
+        Audio.sfx('decide');
+        pendingEcho = { text: q.echoA, timer: 240, choice: 'A' };
+        decisionSlowmo = 45;
+      } else if (pickB) {
+        const prevH = heart, prevF = faith, prevM = money;
+        applyEffect(q.effectB);
+        meterDelta = { heart: heart - prevH, faith: faith - prevF, money: money - prevM, timer: 120 };
+        currentDecision.choices.push('B');
+        decisions.push({ question: q.question, choice: 'B', text: q.optionB, difficulty: q.difficulty });
+        Audio.sfx('decide');
+        pendingEcho = { text: q.echoB, timer: 240, choice: 'B' };
+        decisionSlowmo = 45;
+      } else if (decisionTimer <= 0) {
+        const prevH = heart, prevF = faith, prevM = money;
+        heart = Math.max(0, Math.min(100, heart + q.effectS.heart));
+        faith = Math.max(0, Math.min(100, faith + q.effectS.faith));
+        money = Math.max(0, Math.min(100, money + (q.effectS.money || 0)));
+        meterDelta = { heart: heart - prevH, faith: faith - prevF, money: money - prevM, timer: 120 };
+        currentDecision.choices.push('S');
+        decisions.push({ question: q.question, choice: 'S', text: '...silence', difficulty: q.difficulty });
+        silenceCount++;
+        Audio.sfx('silence');
+        screenShake = { frames: 8, intensity: 2 };
+        pendingEcho = { text: q.echoS, timer: 300, choice: 'S' };
+        decisionSlowmo = 45;
+      }
+    }
+    clearJustPressed();
+    return;
+  }
+
+  // STATE.PLAYING
+  frameCount++;
+
+  // Movement — arrow keys only (A/B reserved for decisions)
+  let moveX = 0;
+  if (keys['ArrowLeft']) moveX = -1;
+  if (keys['ArrowRight']) moveX = 1;
+
+  // Gauntlet: prevent moving left past wall (L2 Zone 4)
+  if (currentLevel === 2 && gauntlet.active && !gauntlet.complete) {
+    if (player.x < gauntlet.wallX + 20) {
+      player.x = gauntlet.wallX + 20;
+      heart = Math.max(0, heart - 1);
+      screenShake = { frames: 4, intensity: 3 };
+    }
+  }
+
+  player.vx = moveX * MOVE_SPEED;
+  if (moveX !== 0) player.facing = moveX;
+
+  // Walk animation
+  if (moveX !== 0 && player.grounded) {
+    player.walkTimer++;
+    if (player.walkTimer > 8) { player.walkTimer = 0; player.walkFrame = (player.walkFrame + 1) % 4; }
+  } else {
+    player.walkFrame = 0; player.walkTimer = 0;
+  }
+
+  // Coyote time + Jump buffer (A2)
+  if (player.grounded) { coyoteTimer = 6; }
+  else if (coyoteTimer > 0) { coyoteTimer--; }
+  if (consumePress('ArrowUp') || consumePress('Space')) { jumpBuffer = 6; }
+  if (jumpBuffer > 0) jumpBuffer--;
+
+  // Heart-linked gravity (B2) — L2 only
+  let gravMult = 1, jumpMult = 1;
+  if (currentLevel === 2) {
+    gravMult = 0.9 + (1 - heart / 100) * 0.2; // high heart = lighter (0.9x–1.1x)
+    jumpMult = 0.9 + (heart / 100) * 0.2; // high heart = higher jumps (0.9x–1.1x)
+  }
+
+  // Jump with coyote time + buffer
+  if (jumpBuffer > 0 && coyoteTimer > 0) {
+    player.vy = JUMP_FORCE * jumpMult;
+    player.grounded = false;
+    coyoteTimer = 0;
+    jumpBuffer = 0;
+    Audio.sfx('jump');
+  }
+
+  // Variable jump height — release early for shorter jump
+  if (!keys['ArrowUp'] && !keys['Space'] && player.vy < -4) {
+    player.vy *= 0.85;
+  }
+
+  // Gravity with heart-linked multiplier
+  player.vy += GRAVITY * gravMult;
+  if (player.vy > MAX_FALL) player.vy = MAX_FALL;
+
+  // Invincibility countdown
+  if (player.invincible > 0) player.invincible--;
+
+  // Move X
+  player.x += player.vx;
+
+  // Clamp to world
+  if (player.x < 0) player.x = 0;
+  if (player.x + player.w > WORLD_W) player.x = WORLD_W - player.w;
+
+  // Collide X
+  const solids = getAllSolids();
+  for (const s of solids) {
+    if (aabb(player, s)) {
+      if (player.vx > 0) player.x = s.x - player.w;
+      else if (player.vx < 0) player.x = s.x + s.w;
+    }
+  }
+
+  // Move Y
+  const wasGrounded = player.grounded;
+  player.y += player.vy;
+  player.grounded = false;
+
+  // Collide Y
+  for (const s of solids) {
+    if (aabb(player, s)) {
+      if (player.vy > 0) {
+        player.y = s.y - player.h;
+        // Landing dust particles (A3)
+        if (!wasGrounded) {
+          spawnParticles(player.x + player.w / 2, s.y, 6, '#AAA', { spread: 3, upward: 1, life: 12, size: 2 });
+        }
+        player.vy = 0;
+        player.grounded = true;
+        player.lastSafeX = player.x;
+        player.lastSafeY = player.y;
+      } else if (player.vy < 0) {
+        player.y = s.y + s.h;
+        player.vy = 0;
+      }
+    }
+  }
+
+  // Pit detection — fell below screen → life challenge
+  if (player.y > H + 50) {
+    // Find which pit (gap between ground segments) the player fell into
+    const sorted = level.groundSegments.slice().sort((a, b) => a.x - b.x);
+    const challenges = currentLevel === 2 ? PIT_CHALLENGES_L2 : PIT_CHALLENGES_L1;
+    let pitIdx = 0;
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const gapStart = sorted[i].x + sorted[i].w;
+      const gapEnd = sorted[i + 1].x;
+      if (gapEnd > gapStart && player.x >= gapStart - 20 && player.x <= gapEnd + 20) { pitIdx = i; break; }
+      if (gapEnd > gapStart) pitIdx = i; // fallback: last pit passed
+    }
+    const challenge = challenges[pitIdx % challenges.length];
+    heart = Math.max(0, heart - 15);
+    faith = Math.max(0, faith - 12);
+    money = Math.max(0, money - 10);
+    Audio.sfx('hit');
+    screenShake = { frames: 12, intensity: 7 };
+    spawnParticles(player.lastSafeX, player.lastSafeY, 16, '#FF4444', { spread: 8, upward: 4, life: 25 });
+    addScorePopup(challenge, player.lastSafeX, player.lastSafeY - 30, '#FF6666');
+    addScorePopup('-15\u2764 -12\u271A -10$', player.lastSafeX, player.lastSafeY - 10, '#FF4444');
+    pitChallengeMsg = { text: challenge, timer: 150 };
+    player.x = player.lastSafeX;
+    player.y = player.lastSafeY;
+    player.vy = 0;
+    player.vx = 0;
+  }
+
+  // Life goes on — can't backtrack too far (soft boundary that follows progress)
+  // Freeze boundary in gate zone so player can walk between all 3 gates
+  const inGateZone = level.gates.length > 0 && player.x > level.gates[0].x - 200;
+  if (!inGateZone) lifeBoundary = Math.max(lifeBoundary, player.x - 300);
+  if (player.x < lifeBoundary) {
+    player.x = lifeBoundary;
+    player.vx = Math.max(player.vx, 0.5); // gentle nudge forward
+    if (!lifeBoundaryMsg.shown) {
+      lifeBoundaryMsg = { text: 'Life goes on. You can only move forward.', timer: 210, shown: true };
+    }
+  }
+  // Safe respawn point must respect boundary
+  if (player.lastSafeX < lifeBoundary) player.lastSafeX = lifeBoundary;
+  // Tick boundary message
+  if (lifeBoundaryMsg.timer > 0) lifeBoundaryMsg.timer--;
+  if (pitChallengeMsg.timer > 0) pitChallengeMsg.timer--;
+
+  // Footprint trail — you leave marks where you've been
+  if (player.grounded && moveX !== 0 && frameCount % 12 === 0) {
+    footprints.push({ x: player.x + player.w / 2, y: player.y + player.h, life: 200 });
+  }
+  for (let i = footprints.length - 1; i >= 0; i--) {
+    footprints[i].life--;
+    if (footprints[i].life <= 0) footprints.splice(i, 1);
+  }
+
+  // Collectibles
+  for (const c of level.collectibles) {
+    if (c.collected) continue;
+    const cb = { x: c.x - c.w/2, y: c.y - c.h/2 + Math.sin(frameCount * 0.05 + c.bobOffset) * 4, w: c.w, h: c.h };
+    if (aabb(player, cb)) {
+      c.collected = true;
+      c.sparkle = 15;
+      Audio.sfx('coin');
+      // Sparkle particles (A3)
+      const sparkCol = c.type === 'connection' ? '#FF8844' : c.type === 'passport' ? '#22AAAA' : c.type === 'globe' ? '#4488FF' : '#FFD700';
+      spawnParticles(c.x, c.y, 8, sparkCol, { spread: 4, upward: 2, life: 18 });
+      if (c.type === 'connection') { heart = Math.min(100, heart + 5); addScorePopup('+5 Connection!', c.x, c.y, '#FF8844'); }
+      else if (c.type === 'passport') { faith = Math.min(100, faith + 5); addScorePopup('+5 Identity!', c.x, c.y, '#22AAAA'); }
+      else if (c.type === 'globe') { heart = Math.min(100, heart + 3); faith = Math.min(100, faith + 3); addScorePopup('+3 Both!', c.x, c.y, '#4488FF'); }
+      else if (c.type === 'trophy') { heart = Math.min(100, heart + 2); faith = Math.min(100, faith + 2); trophyCount++; addScorePopup('Trophy!', c.x, c.y, '#FFD700'); }
+    }
+  }
+
+  // Enemies — with stomping (A1) and L2 evolution (B3)
+  for (const e of level.enemies) {
+    // Death animation
+    if (!e.alive) {
+      if (e.deathTimer > 0) e.deathTimer--;
+      continue;
+    }
+    e.frame++;
+
+    // L2 enemy evolution (B3)
+    if (currentLevel === 2) {
+      const dx = player.x - e.x;
+      const dist = Math.abs(dx);
+      if (e.type === 'assimilate') {
+        // Chase player horizontally at half speed
+        e.x += (dx > 0 ? 1 : -1) * 1.5;
+      } else if (e.type === 'homesick') {
+        // Grow larger when player is near
+        e.drawScale = dist < 150 ? 1.5 : 1;
+        e.x = e.startX + Math.sin(e.frame * 0.02) * e.range;
+      } else if (e.type === 'imposter') {
+        // Invisible until within 100px
+        e.visible = dist < 100;
+        e.x = e.startX + Math.sin(e.frame * 0.02) * e.range;
+      } else {
+        e.x = e.startX + Math.sin(e.frame * 0.02) * e.range;
+      }
+    } else {
+      e.x = e.startX + Math.sin(e.frame * 0.02) * e.range;
+    }
+
+    if (player.invincible > 0) continue;
+
+    const ew = e.w * (e.drawScale || 1);
+    const eh = e.h * (e.drawScale || 1);
+    const eb = { x: e.x - ew/2, y: e.y - eh/2, w: ew, h: eh };
+
+    // Stomp check (A1): player falling and landing on top half
+    if (player.vy > 0 && player.y + player.h > eb.y && player.y + player.h < eb.y + eh * 0.6 &&
+        player.x + player.w > eb.x && player.x < eb.x + eb.w) {
+      e.alive = false;
+      e.deathTimer = 15;
+      player.vy = -7; // bounce
+      Audio.sfx('stomp');
+      screenShake = { frames: 2, intensity: 2 };
+      spawnParticles(e.x, e.y, 10, '#FFaa00', { spread: 5, upward: 3, life: 15 });
+      addScorePopup('Stomped!', e.x, e.y - 20, '#FFaa00');
+      // Scarcity splits into two smaller enemies (B3)
+      if (currentLevel === 2 && e.type === 'visa') {
+        level.enemies.push(
+          { type: 'visa', x: e.x - 30, y: e.y, w: 18, h: 16, startX: e.x - 30, range: 60, dir: -1, frame: 0, alive: true, deathTimer: 0, drawScale: 0.7 },
+          { type: 'visa', x: e.x + 30, y: e.y, w: 18, h: 16, startX: e.x + 30, range: 60, dir: 1, frame: 0, alive: true, deathTimer: 0, drawScale: 0.7 }
+        );
+      }
+      continue;
+    }
+
+    // Normal collision — damage
+    if (aabb(player, eb)) {
+      player.invincible = INVINCIBILITY_FRAMES;
+      Audio.sfx('hit');
+      screenShake = { frames: 4, intensity: 3 };
+      spawnParticles(player.x + player.w/2, player.y + player.h/2, 6, '#FF0000', { spread: 3, upward: 1, life: 12 });
+      player.vx = player.facing * -3;
+      player.vy = -5;
+      player.grounded = false;
+      if (e.type === 'stereotype') heart = Math.max(0, heart - 5);
+      else if (e.type === 'bureaucracy') faith = Math.max(0, faith - 5);
+      else if (e.type === 'burnout') { heart = Math.max(0, heart - 3); faith = Math.max(0, faith - 3); }
+      else if (e.type === 'isolation') heart = Math.max(0, heart - 5);
+      else if (e.type === 'imposter') faith = Math.max(0, faith - 5);
+      else if (e.type === 'visa') { heart = Math.max(0, heart - 3); faith = Math.max(0, faith - 3); }
+      else if (e.type === 'homesick') heart = Math.max(0, heart - 5);
+      else if (e.type === 'assimilate') faith = Math.max(0, faith - 5);
+    }
+  }
+
+  // Milestone triggers
+  for (const qb of level.questionBlocks) {
+    if (!qb.used && player.x + player.w > qb.triggerX) {
+      qb.used = true;
+      currentDecision = qb;
+      Audio.sfx('block');
+      fadeTransition = { alpha: 0.5 };
+      state = STATE.DECISION;
+      decisionTimer = 480;
+      decisionEcho = { text: '', timer: 0, choice: '' };
+      break;
+    }
+  }
+
+  // Sparkle animation for collected items
+  for (const c of level.collectibles) {
+    if (c.sparkle > 0) c.sparkle--;
+  }
+
+  // Zone entry quotes (C1)
+  const curZone = getZone(player.x);
+  if (curZone !== lastZone) {
+    const prevZone = lastZone;
+    lastZone = curZone;
+    const quotes = currentLevel === 1 ? ZONE_QUOTES_L1 : ZONE_QUOTES_L2;
+    zoneQuote = { text: quotes[curZone], timer: 180 };
+
+    // Random life event (50% chance on zone change, not on first zone)
+    if (prevZone >= 0 && Math.random() < 0.5) {
+      triggerLifeEvent();
+    }
+
+    // Shadow self zone transition message (B5)
+    if (currentLevel === 2 && l1Decisions[curZone]) {
+      zoneQuote.shadow = 'In Level 1, you chose: "' + l1Decisions[curZone] + '"';
+    }
+  }
+  if (zoneQuote.timer > 0) zoneQuote.timer--;
+  if (lifeEvent.timer > 0) lifeEvent.timer--;
+
+  // Ambient drone — morphs per zone
+  Audio.updateAmbient(curZone, currentLevel);
+
+  // Moment of stillness before gates — music fades, question appears
+  if (!gateStillness.triggered && curZone === 3 && player.x > 5100) {
+    gateStillness.triggered = true;
+    gateStillness.timer = 150; // 2.5 seconds
+    Audio.fadeMusic(0.03, 1.5); // fade music very low
+  }
+  if (gateStillness.timer > 0) {
+    gateStillness.timer--;
+    if (gateStillness.timer <= 0) {
+      Audio.fadeMusic(0.15, 1.0); // restore music
+    }
+  }
+
+  // Shadow recording in L1 (B5)
+  if (currentLevel === 1 && frameCount % 60 === 0) {
+    shadowRecording.push({ x: player.x, y: player.y, zone: curZone });
+  }
+
+  // Gauntlet logic (B6) — L2 Zone 4
+  if (currentLevel === 2 && curZone === 3 && !gauntlet.complete) {
+    if (!gauntlet.active) {
+      if (!gauntletIntro.active) {
+        gauntletIntro = { active: true, timer: 120 };
+      } else if (gauntletIntro.timer > 0) {
+        gauntletIntro.timer--;
+      } else {
+        gauntlet.active = true;
+        gauntlet.wallX = camera.x - 50;
+        gauntlet.currentTD = 0;
+        gauntlet.tdTimer = gauntlet.timedDecisions[0] ? gauntlet.timedDecisions[0].timer : 0;
+      }
+    }
+    gauntlet.wallX += 2; // advance dark wall
+    // Timed decisions
+    if (gauntlet.currentTD >= 0 && gauntlet.currentTD < gauntlet.timedDecisions.length) {
+      const td = gauntlet.timedDecisions[gauntlet.currentTD];
+      if (!td.chosen) {
+        gauntlet.tdTimer--;
+        if (consumePress('KeyA')) {
+          td.chosen = 'A';
+          faith = Math.max(0, faith - 5);
+          money = Math.min(100, money + 3);
+          gauntlet.currentTD++;
+          gauntlet.tdTimer = gauntlet.currentTD < gauntlet.timedDecisions.length ? gauntlet.timedDecisions[gauntlet.currentTD].timer : 0;
+        } else if (consumePress('KeyB')) {
+          td.chosen = 'B';
+          faith = Math.min(100, faith + 5); heart = Math.min(100, heart + 5);
+          money = Math.max(0, money - 3);
+          gauntlet.currentTD++;
+          gauntlet.tdTimer = gauntlet.currentTD < gauntlet.timedDecisions.length ? gauntlet.timedDecisions[gauntlet.currentTD].timer : 0;
+        } else if (gauntlet.tdTimer <= 0) {
+          td.chosen = 'A'; // defaults to fear option
+          faith = Math.max(0, faith - 5);
+          money = Math.min(100, money + 3);
+          gauntlet.currentTD++;
+          gauntlet.tdTimer = gauntlet.currentTD < gauntlet.timedDecisions.length ? gauntlet.timedDecisions[gauntlet.currentTD].timer : 0;
+        }
+      }
+    }
+    if (gauntlet.currentTD >= gauntlet.timedDecisions.length) {
+      gauntlet.complete = true;
+    }
+  }
+
+  // Gates — only accessible after gauntlet in L2 Zone 4
+  for (const g of level.gates) {
+    if (currentLevel === 2 && !gauntlet.complete) continue;
+    // Check gate requirements
+    if (g.requires) {
+      const needH = g.requires.heart || 0;
+      const needF = g.requires.faith || 0;
+      if (heart < needH || faith < needF) continue; // locked — skip entry but don't block movement
+    }
+    if (aabb(player, g)) {
+      endGate = g;
+      Audio.sfx('gate');
+      if (currentLevel === 1) {
+        // Save L1 decisions for shadow replay (B5)
+        l1Decisions = decisions.map(d => d.text);
+        levelCompleteTimer = 0;
+        fadeTransition = { alpha: 1 };
+        state = STATE.LEVEL_COMPLETE;
+      } else {
+        Audio.playTrack('end');
+        fadeTransition = { alpha: 1 };
+        state = STATE.END;
+      }
+    }
+  }
+
+  // Update particles (A3)
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.1;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  // Update score popups (A3)
+  for (let i = scorePopups.length - 1; i >= 0; i--) {
+    const sp = scorePopups[i];
+    sp.y += sp.vy;
+    sp.life--;
+    if (sp.life <= 0) scorePopups.splice(i, 1);
+  }
+
+  // Screen shake countdown (A4)
+  if (screenShake.frames > 0) screenShake.frames--;
+
+  // Shadow playback advance (B5)
+  if (currentLevel === 2) shadowFrame++;
+
+  // Camera
+  const targetCamX = player.x - W * 0.33;
+  camera.x += (targetCamX - camera.x) * CAMERA_LERP;
+  if (camera.x < 0) camera.x = 0;
+  if (camera.x > WORLD_W - W) camera.x = WORLD_W - W;
+
+  clearJustPressed();
+}
+
+// ============================================================
+// DRAWING
+// ============================================================
+
+function drawPixelText(text, x, y, size, color, align) {
+  ctx.font = `bold ${size}px monospace`;
+  ctx.fillStyle = color || '#FFF';
+  ctx.textAlign = align || 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(text, x, y);
+}
+
+// ---- BACKGROUNDS ----
+function drawSky() {
+  const z = getZone(camera.x + W / 2);
+  let topColor, bottomColor;
+  if (currentLevel === 1) {
+    if (z === 0) { topColor = '#4A6AFF'; bottomColor = '#9BB8FF'; }
+    else if (z === 1) { topColor = '#4A5ABF'; bottomColor = '#9BA8CF'; }
+    else if (z === 2) { topColor = '#2A3A8F'; bottomColor = '#6A78BF'; }
+    else { topColor = '#FF6633'; bottomColor = '#FFCC66'; }
+  } else {
+    if (z === 0) { topColor = '#5566AA'; bottomColor = '#8899CC'; }
+    else if (z === 1) { topColor = '#445566'; bottomColor = '#778899'; }
+    else if (z === 2) { topColor = '#667744'; bottomColor = '#99AA77'; }
+    else { topColor = '#CC6644'; bottomColor = '#FFDD88'; }
+  }
+
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, topColor);
+  grad.addColorStop(1, bottomColor);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// Sky responds to faith — subtle mood overlay
+function drawSkyMood() {
+  if (typeof faith === 'undefined') return;
+  const faithPct = faith / 100;
+  if (faithPct > 0.6) {
+    // Warm golden glow — faith is strong
+    const warmth = (faithPct - 0.6) / 0.4;
+    ctx.fillStyle = 'rgba(255,200,80,' + (warmth * 0.1) + ')';
+    ctx.fillRect(0, 0, W, H * 0.6);
+  } else if (faithPct < 0.35) {
+    // Cool gray wash — faith is wavering
+    const cold = (0.35 - faithPct) / 0.35;
+    ctx.fillStyle = 'rgba(80,80,110,' + (cold * 0.12) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+function drawClouds() {
+  const isL2 = currentLevel === 2;
+  for (const c of clouds) {
+    const parallax = c.layer === 0 ? 0.2 : 0.4;
+    const speedMult = isL2 ? 0.5 : 1; // slower clouds in L2
+    const sx = c.x - camera.x * parallax * speedMult;
+    const wx = ((sx % (W + c.w * 2)) + W + c.w * 2) % (W + c.w * 2) - c.w;
+
+    ctx.fillStyle = isL2 ? '#555566' : COL.cloudShadow;
+    drawCloudShape(wx + 2, c.y + 2, c.w);
+    ctx.fillStyle = isL2 ? '#777788' : COL.cloud;
+    drawCloudShape(wx, c.y, c.w);
+  }
+}
+
+function drawCloudShape(x, y, w) {
+  const h = w * 0.4;
+  ctx.beginPath();
+  ctx.ellipse(x + w * 0.3, y + h * 0.5, w * 0.3, h * 0.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(x + w * 0.6, y + h * 0.35, w * 0.25, h * 0.45, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(x + w * 0.45, y + h * 0.3, w * 0.22, h * 0.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawHills() {
+  const isL2 = currentLevel === 2;
+  for (const h of hills) {
+    const sx = h.x - camera.x * 0.3;
+    if (sx + h.w < -50 || sx > W + 50) continue;
+    ctx.fillStyle = isL2 ? '#3A2860' : '#3CB043';
+    ctx.beginPath();
+    ctx.ellipse(sx + h.w / 2, GROUND_Y, h.w / 2, h.h, 0, Math.PI, 0);
+    ctx.fill();
+    ctx.fillStyle = isL2 ? '#2A1A48' : '#2E8B37';
+    ctx.beginPath();
+    ctx.ellipse(sx + h.w / 2 + 5, GROUND_Y, h.w / 2 - 5, h.h - 8, 0, Math.PI, 0);
+    ctx.fill();
+  }
+}
+
+// Background element helpers
+function drawBgPerson(x, gy, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x - 4, gy - h, 8, h - 8);
+  ctx.beginPath(); ctx.arc(x, gy - h - 4, 5, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawBgCar(x, gy, w, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, gy - 14, w, 14);
+  ctx.fillRect(x + w * 0.15, gy - 24, w * 0.6, 12);
+  ctx.fillStyle = '#AACCEE';
+  ctx.fillRect(x + w * 0.2, gy - 22, w * 0.25, 8);
+  ctx.fillStyle = '#222';
+  ctx.beginPath(); ctx.arc(x + w * 0.2, gy, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x + w * 0.8, gy, 5, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawBgFlagSymbol(x, y, size) {
+  ctx.fillStyle = '#888888';
+  ctx.fillRect(x, y, size * 0.12, size); // pole
+  ctx.fillStyle = '#DD4444';
+  ctx.fillRect(x + size * 0.12, y, size * 0.5, size * 0.35); // flag
+  ctx.fillStyle = '#4444DD';
+  ctx.fillRect(x + size * 0.12, y + size * 0.35, size * 0.5, size * 0.35); // second stripe
+}
+
+function drawBackgrounds() {
+  const cx = camera.x;
+  const parallax = 0.15;
+  const aCount = decisions.filter(d => d.choice === 'A').length;
+  const bCount = decisions.filter(d => d.choice === 'B').length;
+
+  const gy = GROUND_Y;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.5)';
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetX = 3;
+  ctx.shadowOffsetY = 3;
+
+  if (currentLevel === 1) {
+    function drawBubble(sx, a) {
+      if (a <= 0) return;
+      // A choices = isolation/bubble: small room → TV → takeout → headphones → co-national group → familiar food → flag on wall → video call
+      // a=1: small room outline
+      if (a >= 1) {
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sx, gy - 50, 60, 50);
+        ctx.fillStyle = '#333';
+        ctx.fillRect(sx + 2, gy - 48, 56, 46);
+        // window
+        ctx.fillStyle = '#334';
+        ctx.fillRect(sx + 40, gy - 42, 14, 14);
+        ctx.strokeStyle = '#555';
+        ctx.strokeRect(sx + 40, gy - 42, 14, 14);
+      }
+      // a>=2: TV on
+      if (a >= 2) {
+        ctx.fillStyle = '#222';
+        ctx.fillRect(sx + 8, gy - 35, 20, 14);
+        ctx.fillStyle = '#4466AA';
+        ctx.fillRect(sx + 9, gy - 34, 18, 12);
+        // glow
+        ctx.fillStyle = 'rgba(68,102,170,0.15)';
+        ctx.fillRect(sx + 2, gy - 48, 56, 46);
+      }
+      // a>=3: takeout containers
+      if (a >= 3) {
+        ctx.fillStyle = '#AA8844';
+        ctx.fillRect(sx + 35, gy - 12, 12, 8);
+        ctx.fillRect(sx + 42, gy - 14, 10, 8);
+        ctx.fillStyle = '#886633';
+        ctx.fillRect(sx + 36, gy - 13, 10, 2);
+      }
+      // a>=4: headphones on person
+      if (a >= 4) {
+        ctx.fillStyle = '#888';
+        ctx.beginPath();
+        ctx.arc(sx + 18, gy - 22, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#555';
+        ctx.beginPath();
+        ctx.arc(sx + 12, gy - 22, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(sx + 24, gy - 22, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(sx + 18, gy - 27, 7, Math.PI, 0);
+        ctx.stroke();
+      }
+      // a>=5: co-national-only group (2-3 similar figures, no outsiders)
+      if (a >= 5) {
+        const groupX = sx + 70;
+        for (let i = 0; i < 3; i++) {
+          ctx.fillStyle = '#556688';
+          ctx.fillRect(groupX + i * 12, gy - 26, 8, 18);
+          ctx.beginPath();
+          ctx.arc(groupX + i * 12 + 4, gy - 30, 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // bubble around them
+        ctx.strokeStyle = 'rgba(100,100,150,0.4)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.ellipse(groupX + 18, gy - 16, 28, 22, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      // a>=6: familiar food shop sign
+      if (a >= 6) {
+        ctx.fillStyle = '#774422';
+        ctx.fillRect(sx + 120, gy - 55, 50, 55);
+        ctx.fillStyle = '#995533';
+        ctx.fillRect(sx + 122, gy - 53, 46, 15);
+        ctx.fillStyle = '#FFDD88';
+        ctx.font = '7px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('HOME', sx + 145, gy - 42);
+        ctx.fillText('FOOD', sx + 145, gy - 35);
+        ctx.textAlign = 'left';
+      }
+      // a>=7: flag on wall
+      if (a >= 7) {
+        ctx.fillStyle = '#888';
+        ctx.fillRect(sx + 46, gy - 45, 2, 16);
+        ctx.fillStyle = '#DD4444';
+        ctx.fillRect(sx + 48, gy - 45, 10, 5);
+        ctx.fillStyle = '#4444DD';
+        ctx.fillRect(sx + 48, gy - 40, 10, 5);
+        ctx.fillStyle = '#44AA44';
+        ctx.fillRect(sx + 48, gy - 35, 10, 5);
+      }
+      // a>=8: video call screen (someone far away)
+      if (a >= 8) {
+        ctx.fillStyle = '#222';
+        ctx.fillRect(sx + 72, gy - 45, 28, 20);
+        ctx.fillStyle = '#336644';
+        ctx.fillRect(sx + 73, gy - 44, 26, 18);
+        // face on screen
+        ctx.fillStyle = '#DDAA77';
+        ctx.beginPath();
+        ctx.arc(sx + 86, gy - 38, 5, 0, Math.PI * 2);
+        ctx.fill();
+        // heart icon floating
+        ctx.fillStyle = 'rgba(255,100,100,0.5)';
+        ctx.font = '8px monospace';
+        ctx.fillText('\u2764', sx + 95, gy - 42);
+      }
+    }
+
+    function drawBridge(sx, b) {
+      if (b <= 0) return;
+      // B choices = integration: coffee chat → language exchange → potluck → group photo → cultural festival → shared apartment → mural of flags → sunrise over campus
+      const pCount = Math.min(b <= 1 ? 2 : b <= 2 ? 3 : b <= 3 ? 4 : b <= 4 ? 5 : b <= 5 ? 6 : b <= 6 ? 8 : b <= 7 ? 10 : 12, 12);
+      // b>=1: two people with coffee
+      if (b >= 1) {
+        const colors = ['#4466AA', '#AA6644', '#667788', '#886644', '#4455AA', '#AA5566'];
+        const pStart = b >= 5 ? sx + 80 : sx;
+        for (let i = 0; i < pCount; i++) {
+          ctx.fillStyle = colors[i % colors.length];
+          ctx.fillRect(pStart + i * 15, gy - 26 - (i % 3) * 4, 8, 18 + (i % 3) * 4);
+          ctx.beginPath();
+          ctx.arc(pStart + i * 15 + 4, gy - 30 - (i % 3) * 4, 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      // b>=2: warm sun glow (connection warmth)
+      if (b >= 2) {
+        ctx.fillStyle = 'rgba(255,200,80,0.12)';
+        ctx.beginPath();
+        ctx.arc(sx + 40, gy - 160, 50 + b * 10, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // b>=3: shared food on a table
+      if (b >= 3) {
+        ctx.fillStyle = '#8B6914';
+        ctx.fillRect(sx - 10, gy - 14, 50, 4); // table
+        ctx.fillRect(sx + 5, gy - 10, 4, 10); // leg
+        ctx.fillRect(sx + 30, gy - 10, 4, 10); // leg
+        // dishes
+        const dishColors = ['#DD6644', '#44AA44', '#DDAA44', '#DD4488'];
+        for (let i = 0; i < Math.min(b, 5); i++) {
+          ctx.fillStyle = dishColors[i % dishColors.length];
+          ctx.beginPath();
+          ctx.arc(sx + i * 10, gy - 18, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      // b>=4: tree + bird (nature/growth)
+      if (b >= 4) {
+        ctx.fillStyle = '#6B4226';
+        ctx.fillRect(sx - 25, gy - 50, 8, 50);
+        ctx.fillStyle = '#3CB043';
+        ctx.beginPath();
+        ctx.arc(sx - 21, gy - 55, 18, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#2E8B37';
+        ctx.beginPath();
+        ctx.arc(sx - 15, gy - 62, 14, 0, Math.PI * 2);
+        ctx.fill();
+        // bird
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(sx + 30, gy - 80, 5, Math.PI, Math.PI * 1.5);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(sx + 40, gy - 80, 5, Math.PI * 1.5, Math.PI * 2);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+      // b>=5: cultural festival tent
+      if (b >= 5 && b < 7) {
+        ctx.fillStyle = '#AA6633';
+        ctx.fillRect(sx + 5, gy - 65, 60, 65);
+        ctx.fillStyle = '#DD8844';
+        ctx.beginPath();
+        ctx.moveTo(sx, gy - 65);
+        ctx.lineTo(sx + 35, gy - 88);
+        ctx.lineTo(sx + 70, gy - 65);
+        ctx.closePath();
+        ctx.fill();
+        // banner flags
+        const flagColors = ['#DD4444', '#4444DD', '#44AA44', '#DDAA44'];
+        for (let i = 0; i < 4; i++) {
+          ctx.fillStyle = flagColors[i];
+          ctx.beginPath();
+          ctx.moveTo(sx + 10 + i * 14, gy - 68);
+          ctx.lineTo(sx + 14 + i * 14, gy - 78);
+          ctx.lineTo(sx + 18 + i * 14, gy - 68);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#4A2A0A';
+        ctx.fillRect(sx + 25, gy - 22, 10, 22); // door
+      }
+      // b>=7: large community center with mural
+      if (b >= 7) {
+        ctx.fillStyle = '#8B7355';
+        ctx.fillRect(sx + 5, gy - 90, 80, 90);
+        ctx.fillStyle = '#AA8866';
+        ctx.beginPath();
+        ctx.moveTo(sx, gy - 90);
+        ctx.lineTo(sx + 45, gy - 115);
+        ctx.lineTo(sx + 90, gy - 90);
+        ctx.closePath();
+        ctx.fill();
+        // Mural of flags on the wall
+        const muralFlags = ['#DD4444', '#4444DD', '#44AA44', '#DDAA44', '#AA44AA', '#44AAAA'];
+        for (let i = 0; i < 6; i++) {
+          ctx.fillStyle = muralFlags[i];
+          ctx.fillRect(sx + 10 + i * 12, gy - 78, 10, 7);
+        }
+        // Windows
+        ctx.fillStyle = '#FFDD88';
+        ctx.fillRect(sx + 18, gy - 60, 12, 16);
+        ctx.fillRect(sx + 58, gy - 60, 12, 16);
+        ctx.fillStyle = '#4A2A0A';
+        ctx.fillRect(sx + 35, gy - 30, 14, 30); // door
+        // "WELCOME" sign
+        ctx.fillStyle = '#FFDD88';
+        ctx.font = '6px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('WELCOME', sx + 45, gy - 93);
+        ctx.textAlign = 'left';
+      }
+      // b>=6: garden/flowers (roots growing)
+      if (b >= 6) {
+        const flowerColors = ['#FF6688', '#FFAA33', '#FF88CC', '#FFDD44'];
+        for (let i = 0; i < 5; i++) {
+          ctx.fillStyle = '#44AA44';
+          ctx.fillRect(sx - 30 + i * 14, gy - 10, 2, 10);
+          ctx.fillStyle = flowerColors[i % flowerColors.length];
+          ctx.beginPath();
+          ctx.arc(sx - 29 + i * 14, gy - 12, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      // b>=8: sunrise/rainbow over campus (hope)
+      if (b >= 8) {
+        const rcx = sx + 40, rcy = gy - 100;
+        const rainbowColors = ['#FF000033', '#FF880033', '#FFFF0033', '#00FF0033', '#0088FF33', '#8800FF33'];
+        for (let i = 0; i < rainbowColors.length; i++) {
+          ctx.strokeStyle = rainbowColors[i];
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.arc(rcx, rcy, 70 + i * 5, Math.PI, 0);
+          ctx.stroke();
+        }
+        ctx.lineWidth = 1;
+      }
+    }
+
+    // One bubble + one bridge element per zone. Zone 0 starts empty (counts=0).
+    // ======== ZONE 0: ARRIVAL (0-1400) ========
+    drawBgAt(300, cx, parallax, (sx) => drawBubble(sx, aCount));
+    drawBgAt(700, cx, parallax, (sx) => drawBridge(sx, bCount));
+
+    // ======== ZONE 1: CAMPUS (1500-2900) ========
+    drawBgAt(1700, cx, parallax, (sx) => drawBubble(sx, aCount));
+    drawBgAt(2200, cx, parallax, (sx) => drawBridge(sx, bCount));
+
+    // ======== ZONE 2: CULTURE (3000-4400) ========
+    drawBgAt(3200, cx, parallax, (sx) => drawBubble(sx, aCount));
+    drawBgAt(3700, cx, parallax, (sx) => drawBridge(sx, bCount));
+
+    // ======== ZONE 3: BELONGING (4500-5500) ========
+    drawBgAt(4700, cx, parallax, (sx) => drawBubble(sx, aCount));
+    drawBgAt(5100, cx, parallax, (sx) => drawBridge(sx, bCount));
+
+  } else {
+    // Level 2 backgrounds — introspective, keep simpler
+    const p = aCount;
+    drawBgAt(400, cx, parallax, (sx) => {
+      ctx.fillStyle = 'rgba(80,60,40,0.55)';
+      const shelfH = 100 + p * 4;
+      ctx.fillRect(sx, GROUND_Y - shelfH, 140, shelfH);
+      for (let r = 0; r < Math.floor(shelfH / 25); r++) {
+        ctx.fillStyle = 'rgba(60,40,20,0.65)';
+        ctx.fillRect(sx, GROUND_Y - shelfH + 5 + r * 25, 140, 3);
+        for (let b = 0; b < 8; b++) {
+          const colors = ['rgba(180,40,40,0.65)', 'rgba(40,80,180,0.65)', 'rgba(40,140,40,0.65)', 'rgba(180,140,40,0.65)'];
+          ctx.fillStyle = colors[(b + r) % 4];
+          ctx.fillRect(sx + 5 + b * 16, GROUND_Y - shelfH + 8 + r * 25, 12, 20);
+        }
+      }
+    });
+    drawBgAt(2100, cx, parallax, (sx) => {
+      const dollarSize = 55 + p * 6;
+      ctx.fillStyle = 'rgba(100,100,50,0.5)';
+      ctx.font = 'bold ' + dollarSize + 'px monospace';
+      ctx.textAlign = 'center';
+      if (p > bCount) {
+        ctx.fillText('$', sx + 30, GROUND_Y - 60);
+        ctx.fillText('$', sx + 100, GROUND_Y - 80);
+        if (p >= 4) ctx.fillText('$', sx + 160, GROUND_Y - 50);
+      }
+      ctx.fillStyle = 'rgba(80,60,40,0.5)';
+      const famCount = 2 + Math.min(bCount, 4);
+      for (let i = 0; i < famCount; i++) {
+        const px = sx - 40 + i * 25;
+        ctx.fillRect(px, GROUND_Y - 45, 10, 45);
+        ctx.beginPath(); ctx.arc(px + 5, GROUND_Y - 50, 7, 0, Math.PI * 2); ctx.fill();
+      }
+    });
+    drawBgAt(3800, cx, parallax, (sx) => {
+      ctx.fillStyle = 'rgba(90,70,50,0.55)';
+      ctx.fillRect(sx + 20, GROUND_Y - 80, 80, 80);
+      ctx.beginPath(); ctx.moveTo(sx + 15, GROUND_Y - 80); ctx.lineTo(sx + 60, GROUND_Y - 110); ctx.lineTo(sx + 105, GROUND_Y - 80); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(60,60,80,0.5)';
+      const ppl = 3 + Math.min(bCount, 6);
+      for (let i = 0; i < ppl; i++) {
+        const px = sx - 20 + i * 22;
+        ctx.fillRect(px, GROUND_Y - 35, 10, 35);
+        ctx.beginPath(); ctx.arc(px + 5, GROUND_Y - 40, 6, 0, Math.PI * 2); ctx.fill();
+      }
+    });
+    drawBgAt(5300, cx, parallax, (sx) => {
+      ctx.fillStyle = 'rgba(80,60,40,0.65)';
+      ctx.fillRect(sx, GROUND_Y - 100, 70, 100);
+      ctx.fillStyle = 'rgba(255,220,100,0.45)';
+      ctx.beginPath(); ctx.moveTo(sx + 10, GROUND_Y - 90); ctx.lineTo(sx + 60, GROUND_Y - 90);
+      ctx.lineTo(sx + 120, GROUND_Y); ctx.lineTo(sx - 50, GROUND_Y); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(200,200,200,0.5)';
+      const ax = sx + 100 + Math.sin(frameCount * 0.01) * 20;
+      const ay = GROUND_Y - 160 + Math.cos(frameCount * 0.008) * 10;
+      ctx.fillRect(ax, ay, 30, 6);
+      ctx.fillRect(ax + 10, ay - 8, 10, 22);
+      ctx.fillRect(ax + 25, ay - 4, 8, 3);
+    });
+  }
+
+  ctx.restore(); // end background shadow
+}
+
+function drawBgAt(worldX, cameraX, parallax, drawFn) {
+  const sx = worldX - cameraX * parallax;
+  if (sx > -300 && sx < W + 300) drawFn(sx);
+}
+
+// ---- BLOCKS ----
+function drawBrickBlock(x, y, w, h) {
+  ctx.fillStyle = COL.brick;
+  ctx.fillRect(x, y, w, h);
+
+  // Brick pattern — clipped to block bounds
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  const bw = BLOCK;
+  const bh = BLOCK / 2;
+  ctx.strokeStyle = COL.brickDark;
+  ctx.lineWidth = 1;
+  for (let row = 0; row < Math.ceil(h / bh); row++) {
+    for (let col = -1; col < Math.ceil(w / bw) + 1; col++) {
+      const bx = x + col * bw + (row % 2 === 1 ? bw / 2 : 0);
+      const by = y + row * bh;
+      ctx.strokeRect(bx, by, bw, bh);
+      ctx.fillStyle = COL.brickLight;
+      ctx.fillRect(bx + 1, by + 1, 2, bh - 2);
+      ctx.fillStyle = COL.brick;
+    }
+  }
+  ctx.restore();
+}
+
+function drawGateStillness() {
+  if (gateStillness.timer <= 0) return;
+  const alpha = Math.min(1, gateStillness.timer / 30) * Math.min(1, (150 - gateStillness.timer) / 30);
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.7)';
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = 'rgba(255,250,220,' + (alpha * 0.85) + ')';
+  ctx.font = 'italic bold 22px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('What will you choose?', W / 2, H / 2 - 50);
+  ctx.restore();
+}
+
+function drawFootprints() {
+  if (footprints.length === 0) return;
+  const cx = camera.x;
+  for (const fp of footprints) {
+    const sx = fp.x - cx;
+    if (sx < -10 || sx > W + 10) continue;
+    const alpha = (fp.life / 200) * 0.25;
+    ctx.fillStyle = currentLevel === 2 ? 'rgba(140,120,160,' + alpha + ')' : 'rgba(100,80,60,' + alpha + ')';
+    ctx.fillRect(sx - 3, fp.y - 1, 2, 2);
+    ctx.fillRect(sx + 1, fp.y - 1, 2, 2);
+  }
+}
+
+function drawLifeBoundary() {
+  if (lifeBoundary <= 10) return; // don't draw at start
+  const bx = lifeBoundary - camera.x;
+  if (bx < -80) return; // completely off-screen left
+  // Dark fog creeping from the left — the past fading away
+  const fogEnd = Math.min(bx + 70, W);
+  if (fogEnd <= 0) return;
+  const grad = ctx.createLinearGradient(0, 0, fogEnd, 0);
+  grad.addColorStop(0, currentLevel === 2 ? 'rgba(8,3,20,0.92)' : 'rgba(5,5,15,0.85)');
+  grad.addColorStop(0.6, currentLevel === 2 ? 'rgba(8,3,20,0.5)' : 'rgba(5,5,15,0.4)');
+  grad.addColorStop(1, 'rgba(5,5,15,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, fogEnd, H);
+  // Boundary message
+  if (lifeBoundaryMsg.timer > 0) {
+    const alpha = Math.min(1, lifeBoundaryMsg.timer / 40);
+    ctx.save();
+    ctx.fillStyle = 'rgba(200,200,220,' + (alpha * 0.85) + ')';
+    ctx.font = 'italic 15px monospace';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = 8;
+    ctx.fillText(lifeBoundaryMsg.text, W / 2, H / 2 + 60);
+    ctx.restore();
+  }
+  // Pit challenge message — centered, bold, red tint
+  if (pitChallengeMsg.timer > 0) {
+    const alpha = Math.min(1, pitChallengeMsg.timer / 30);
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,80,80,' + (alpha * 0.95) + ')';
+    ctx.font = 'bold 18px monospace';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)';
+    ctx.shadowBlur = 10;
+    ctx.fillText(pitChallengeMsg.text, W / 2, H / 2 - 20);
+    ctx.fillStyle = 'rgba(255,200,200,' + (alpha * 0.7) + ')';
+    ctx.font = '12px monospace';
+    ctx.fillText('Life hits hard sometimes.', W / 2, H / 2 + 5);
+    ctx.restore();
+  }
+}
+
+function drawGroundAndPlatforms() {
+  const cx = camera.x;
+  const isL2 = currentLevel === 2;
+  // Ground segments
+  for (const g of level.groundSegments) {
+    const sx = g.x - cx;
+    if (sx + g.w < 0 || sx > W) continue;
+    if (isL2) {
+      // Purple/indigo palette (B4) — clean, no outlines
+      ctx.fillStyle = '#4A3066';
+      ctx.fillRect(sx, g.y, g.w, g.h);
+      // Subtle horizontal lines only
+      ctx.fillStyle = '#3E2858';
+      for (let row = 1; row < Math.ceil(g.h / (BLOCK/2)); row++) {
+        ctx.fillRect(sx, g.y + row * (BLOCK/2), g.w, 1);
+      }
+      ctx.fillStyle = '#C0C8D8'; // silver grass
+      ctx.fillRect(sx, g.y, g.w, 3);
+    } else {
+      drawBrickBlock(sx, g.y, g.w, g.h);
+      ctx.fillStyle = '#55BB33';
+      ctx.fillRect(sx, g.y, g.w, 3);
+    }
+  }
+
+  // Platforms
+  for (const p of level.platforms) {
+    const sx = p.x - cx;
+    if (sx + p.w < 0 || sx > W) continue;
+    if (isL2) {
+      ctx.fillStyle = '#4A3066';
+      ctx.fillRect(sx, p.y, p.w, p.h);
+      ctx.fillStyle = '#C0C8D8';
+      ctx.fillRect(sx, p.y, p.w, 2);
+    } else {
+      drawBrickBlock(sx, p.y, p.w, p.h);
+      ctx.fillStyle = '#55BB33';
+      ctx.fillRect(sx, p.y, p.w, 2);
+    }
+  }
+}
+
+function drawQuestionBlocks() {
+  const cx = camera.x;
+  const zoneLabels = currentLevel === 1 ? ['ARRIVAL', 'CAMPUS', 'CULTURE', 'BELONGING'] : ['HOMESICK', 'PRESSURE', 'BRIDGE', 'ROOTS'];
+  for (const qb of level.questionBlocks) {
+    const sx = qb.x - cx;
+    if (sx < -60 || sx > W + 60) continue;
+
+    const markerH = BLOCK * 5;
+    const markerW = 6;
+    const baseY = GROUND_Y - markerH;
+    const pulse = Math.sin(frameCount * 0.06) * 0.3 + 0.7;
+
+    if (qb.used) {
+      // Faded marker after triggered
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#888';
+      ctx.fillRect(sx - markerW / 2, baseY, markerW, markerH);
+      ctx.fillRect(sx - 20, baseY, 40, 6);
+      ctx.globalAlpha = 1;
+    } else {
+      // Glowing milestone marker — tall post with banner
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = COL.qblock;
+
+      // Post
+      ctx.fillStyle = COL.qblock;
+      ctx.fillRect(sx - markerW / 2, baseY, markerW, markerH);
+
+      // Top banner/flag
+      ctx.fillStyle = COL.qblock;
+      ctx.globalAlpha = pulse;
+      ctx.fillRect(sx - 24, baseY, 48, 28);
+      ctx.globalAlpha = 1;
+
+      // Banner border
+      ctx.strokeStyle = COL.qblockDark;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx - 24, baseY, 48, 28);
+
+      // Zone label on banner
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(zoneLabels[qb.zone] || '?', sx, baseY + 10);
+
+      // "25%" / "50%" / "75%" / "100%" progress indicator
+      const pct = ((qb.zone + 1) * 25) + '%';
+      ctx.fillStyle = '#553300';
+      ctx.font = 'bold 8px monospace';
+      ctx.fillText(pct, sx, baseY + 22);
+
+      // Floating particles around active markers
+      for (let i = 0; i < 3; i++) {
+        const px = sx + Math.sin(frameCount * 0.03 + i * 2.1) * 20;
+        const py = baseY + 14 + Math.cos(frameCount * 0.04 + i * 1.7) * 25;
+        const sz = 2 + Math.sin(frameCount * 0.08 + i) * 1;
+        ctx.globalAlpha = 0.5 + Math.sin(frameCount * 0.05 + i) * 0.3;
+        ctx.fillStyle = COL.qblock;
+        ctx.fillRect(px - sz/2, py - sz/2, sz, sz);
+      }
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+    }
+  }
+}
+
+// ---- COLLECTIBLES ----
+function drawCollectibles() {
+  const cx = camera.x;
+  for (const c of level.collectibles) {
+    const sx = c.x - cx;
+    if (sx < -20 || sx > W + 20) continue;
+
+    // Sparkle effect after collection
+    if (c.collected) {
+      if (c.sparkle > 0) {
+        const alpha = c.sparkle / 15;
+        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+        for (let i = 0; i < 4; i++) {
+          const angle = (i / 4) * Math.PI * 2 + frameCount * 0.2;
+          const dist = (15 - c.sparkle) * 3;
+          ctx.fillRect(sx + Math.cos(angle) * dist - 2, c.y + Math.sin(angle) * dist - 2, 4, 4);
+        }
+      }
+      continue;
+    }
+
+    const bob = Math.sin(frameCount * 0.05 + c.bobOffset) * 4;
+    const cy = c.y + bob;
+
+    if (c.type === 'heart') {
+      drawHandshake(sx, cy, 14, COL.heart);
+    } else if (c.type === 'cross') {
+      drawPassport(sx, cy, 14, COL.cross);
+    } else if (c.type === 'globe') {
+      drawGlobe(sx, cy, 7, COL.globe);
+    } else if (c.type === 'trophy') {
+      drawTrophy(sx, cy, 14, COL.trophy);
+    }
+  }
+}
+
+function drawHeart(x, y, s, col) {
+  ctx.fillStyle = col;
+  const hs = s / 2;
+  ctx.beginPath();
+  ctx.arc(x - hs / 2, y - hs / 3, hs / 2, Math.PI, 0);
+  ctx.arc(x + hs / 2, y - hs / 3, hs / 2, Math.PI, 0);
+  ctx.lineTo(x, y + hs);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawHandshake(x, y, s, col) {
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2;
+  // Two arms reaching toward each other
+  ctx.beginPath();
+  ctx.moveTo(x - s/2, y + 2);
+  ctx.lineTo(x - 2, y - 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x + s/2, y + 2);
+  ctx.lineTo(x + 2, y - 2);
+  ctx.stroke();
+  // Hands clasped in the middle
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.arc(x, y, s * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 1;
+}
+
+function drawCross(x, y, s, col) {
+  ctx.fillStyle = col;
+  const w = s * 0.3, h = s;
+  ctx.fillRect(x - w / 2, y - h / 2, w, h);
+  ctx.fillRect(x - h / 3, y - h / 4, h * 0.66, w);
+  // Outline
+  ctx.strokeStyle = '#B8960A';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+}
+
+function drawPassport(x, y, s, col) {
+  ctx.fillStyle = '#224488';
+  const w = s * 0.7, h = s;
+  ctx.fillRect(x - w / 2, y - h / 2, w, h);
+  // Gold trim
+  ctx.strokeStyle = '#CCAA44';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x - w / 2 + 2, y - h / 2 + 2, w - 4, h - 4);
+  // Emblem circle
+  ctx.strokeStyle = '#CCAA44';
+  ctx.beginPath();
+  ctx.arc(x, y - 1, s * 0.15, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+function drawGlobe(x, y, r, col) {
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  // Lines on globe
+  ctx.strokeStyle = '#2266CC';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.ellipse(x, y, r * 0.5, r, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - r, y);
+  ctx.lineTo(x + r, y);
+  ctx.stroke();
+}
+
+function drawTrophy(x, y, s, col) {
+  ctx.fillStyle = col;
+  // Cup
+  ctx.fillRect(x - s / 3, y - s / 3, s * 0.66, s / 2);
+  // Stem
+  ctx.fillRect(x - 2, y + s / 6, 4, s / 4);
+  // Base
+  ctx.fillRect(x - s / 4, y + s / 6 + s / 4, s / 2, 3);
+  // Handles
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x - s / 3 - 3, y - s / 6 + 4, 5, -Math.PI / 2, Math.PI / 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x + s / 3 + 3, y - s / 6 + 4, 5, Math.PI / 2, -Math.PI / 2);
+  ctx.stroke();
+}
+
+// ---- ENEMIES ----
+function drawEnemies() {
+  const cx = camera.x;
+  for (const e of level.enemies) {
+    // Death squish animation (A1)
+    if (!e.alive) {
+      if (e.deathTimer > 0) {
+        const sx = e.x - cx;
+        const alpha = e.deathTimer / 15;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = '#888';
+        ctx.fillRect(sx - e.w / 2, e.y - 4, e.w, 8); // flat squished shape
+        ctx.globalAlpha = 1;
+      }
+      continue;
+    }
+
+    // Pleaser invisible until close (B3)
+    if (currentLevel === 2 && e.type === 'imposter' && !e.visible) continue;
+
+    const sx = e.x - cx;
+    if (sx < -40 || sx > W + 40) continue;
+
+    const scale = e.drawScale || 1;
+
+    let col, eyeCol = '#FFF';
+    if (e.type === 'stereotype') col = COL.enemyOrange;
+    else if (e.type === 'bureaucracy') col = COL.enemyGreen;
+    else if (e.type === 'burnout') col = COL.enemyPurple;
+    else if (e.type === 'isolation') { col = COL.enemyGray; eyeCol = '#DDD'; }
+    else if (e.type === 'imposter') col = COL.enemyPink;
+    else if (e.type === 'visa') col = COL.enemyBrown;
+    else if (e.type === 'homesick') col = COL.enemyTeal;
+    else if (e.type === 'assimilate') col = COL.enemyCyan;
+    else { col = COL.enemyGray; eyeCol = '#DDD'; }
+
+    // Blob body — squish animation with scale
+    const squish = Math.sin(e.frame * 0.08) * 2;
+    const ew = (e.w + squish) * scale;
+    const eh = (e.h - squish) * scale;
+
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.ellipse(sx, e.y - e.h / 4 * scale + squish / 2, ew / 2, eh / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eyes
+    const eyeScale = Math.min(scale, 1.2);
+    ctx.fillStyle = eyeCol;
+    ctx.fillRect(sx - 6 * eyeScale, e.y - e.h / 4 * scale + squish / 2 - eh * 0.1, 5 * eyeScale, 5 * eyeScale);
+    ctx.fillRect(sx + 2 * eyeScale, e.y - e.h / 4 * scale + squish / 2 - eh * 0.1, 5 * eyeScale, 5 * eyeScale);
+    // Pupils
+    ctx.fillStyle = '#000';
+    const pupilOff = Math.sin(e.frame * 0.02) * 2;
+    ctx.fillRect(sx - 5 * eyeScale + pupilOff, e.y - e.h / 4 * scale + squish / 2 - eh * 0.05, 3 * eyeScale, 3 * eyeScale);
+    ctx.fillRect(sx + 3 * eyeScale + pupilOff, e.y - e.h / 4 * scale + squish / 2 - eh * 0.05, 3 * eyeScale, 3 * eyeScale);
+
+    // Label below
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'center';
+    const labels = { stereotype:'STEREO', bureaucracy:'BUREAU', burnout:'BURNOUT', isolation:'ISOLATE',
+      imposter:'IMPOSTER', visa:'VISA', homesick:'HOMESICK', assimilate:'ASSIMILATE' };
+    ctx.fillText(labels[e.type] || e.type.toUpperCase(), sx, e.y + eh / 2 + 10);
+  }
+}
+
+// ---- PLAYER ----
+function drawPlayer() {
+  if (player.invincible > 0 && Math.floor(player.invincible / 4) % 2 === 0) return; // Flash
+
+  const cx = camera.x;
+  const sx = player.x - cx;
+  const sy = player.y;
+  const f = player.facing;
+  const S = 1.5; // scale factor
+
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.scale(S, S);
+
+  // Skin color (from character selection)
+  const skinData = CHARACTER_SKINS[characterSkin] || CHARACTER_SKINS[0];
+  const skin = skinData.skin;
+  const hair = skinData.hair;
+  const isGirl = characterGender === 1;
+  const shirt = isGirl ? '#CC3366' : '#3366CC';
+  const pants = isGirl ? '#554466' : '#444466';
+  const shoes = isGirl ? '#884422' : '#663300';
+
+  // Head
+  ctx.fillStyle = hair;
+  ctx.fillRect(4, 0, 12, 3); // hair top
+  if (isGirl) {
+    // Longer side hair
+    ctx.fillRect(2, 0, 2, 8);
+    ctx.fillRect(16, 0, 2, 8);
+    // Ponytail
+    const ptSide = f === 1 ? -1 : 15;
+    ctx.fillRect(ptSide, 1, 3, 4);
+    ctx.fillRect(ptSide - 1, 5, 3, 3);
+  }
+  ctx.fillStyle = skin;
+  ctx.fillRect(4, 3, 12, 7); // face
+  // Eye
+  ctx.fillStyle = '#000';
+  if (f === 1) ctx.fillRect(11, 5, 2, 2);
+  else ctx.fillRect(7, 5, 2, 2);
+
+  // Body (shirt)
+  ctx.fillStyle = shirt;
+  ctx.fillRect(3, 10, 14, 8);
+
+  // Arms
+  ctx.fillStyle = skin;
+  const armSwing = player.grounded ? Math.sin(player.walkFrame * 0.8) * 3 : -2;
+  ctx.fillRect(0, 11 + armSwing, 3, 7);
+  ctx.fillRect(17, 11 - armSwing, 3, 7);
+
+  // Pants / skirt
+  ctx.fillStyle = pants;
+  if (isGirl) {
+    // Skirt
+    ctx.fillRect(2, 18, 16, 5);
+    ctx.fillRect(4, 23, 5, 1);
+    ctx.fillRect(11, 23, 5, 1);
+  } else {
+    ctx.fillRect(4, 18, 5, 6);
+    ctx.fillRect(11, 18, 5, 6);
+  }
+
+  // Shoes + walk animation
+  ctx.fillStyle = shoes;
+  const legOff = player.grounded ? Math.sin(player.walkFrame * 1.2) * 2 : 0;
+  ctx.fillRect(3 + legOff, 24, 6, 4);
+  ctx.fillRect(11 - legOff, 24, 6, 4);
+
+  ctx.restore();
+}
+
+// ---- PARTICLES & POPUPS (A3) ----
+function drawParticles() {
+  const cx = camera.x;
+  for (const p of particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - cx - p.size / 2, p.y - p.size / 2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawScorePopups() {
+  const cx = camera.x;
+  for (const sp of scorePopups) {
+    const alpha = sp.life / 45;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = sp.color;
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(sp.text, sp.x - cx, sp.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---- ZONE QUOTES (C1) ----
+function drawLifeEvent() {
+  if (lifeEvent.timer <= 0) return;
+  const alpha = lifeEvent.timer > 150 ? (180 - lifeEvent.timer) / 30 :
+                lifeEvent.timer < 30 ? lifeEvent.timer / 30 : 1;
+  // Banner at top of screen
+  ctx.globalAlpha = alpha * 0.6;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 42, W, 40);
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = lifeEvent.color;
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('LIFE HAPPENS: ' + lifeEvent.text, W / 2, 58);
+  ctx.fillStyle = '#AAA';
+  ctx.font = '9px monospace';
+  ctx.fillText('(You had no choice in this.)', W / 2, 74);
+  ctx.globalAlpha = 1;
+}
+
+function drawZoneQuote() {
+  if (zoneQuote.timer <= 0) return;
+  const alpha = zoneQuote.timer > 150 ? (180 - zoneQuote.timer) / 30 : // fade in
+                zoneQuote.timer < 30 ? zoneQuote.timer / 30 : 1; // fade out
+  ctx.globalAlpha = alpha * 0.6;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 125, W, zoneQuote.shadow ? 80 : 55);
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(zoneQuote.text, W / 2, 158);
+  if (zoneQuote.shadow) {
+    ctx.fillStyle = 'rgba(200,200,255,0.7)';
+    ctx.font = '13px monospace';
+    ctx.fillText(zoneQuote.shadow, W / 2, 182);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---- SHADOW SELF (B5) ----
+function drawShadow() {
+  if (currentLevel !== 2 || shadowPlayback.length === 0) return;
+  const cx = camera.x;
+  const idx = Math.floor(shadowFrame / 60) % shadowPlayback.length;
+  const sp = shadowPlayback[idx];
+  if (!sp) return;
+  const sx = sp.x - cx;
+  const sy = sp.y;
+
+  // Determine shadow posture from L1 decisions
+  const faithChoice = l1Decisions[sp.zone] ? true : false;
+  const shrink = !faithChoice;
+
+  ctx.globalAlpha = 0.25;
+  ctx.fillStyle = '#AABBFF';
+  // Simplified player silhouette
+  const scaleY = shrink ? 0.7 : 1;
+  ctx.fillRect(sx + 3, sy + (shrink ? 8 : 0), 14, 18 * scaleY); // body
+  ctx.fillRect(sx + 4, sy - 5 + (shrink ? 8 : 0), 12, 10); // head
+  ctx.globalAlpha = 1;
+}
+
+// ---- DOUBT FOG (B1) ----
+function drawFog() {
+  if (currentLevel !== 2) return;
+  const cx = camera.x;
+  const px = player.x - cx + player.w / 2;
+  const py = player.y + player.h / 2;
+  // Radius tied to # of faith (B) answers — each answer literally expands your vision
+  const bCount = decisions.filter(d => d.choice === 'B').length;
+  const radius = 80 + bCount * 48; // 0→80, 1→128, 4→272, 8→464
+
+  const grad = ctx.createRadialGradient(px, py, radius * 0.3, px, py, radius);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(0.5, 'rgba(0,0,0,0.2)');
+  grad.addColorStop(0.8, 'rgba(0,0,0,0.6)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.95)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// ---- VIGNETTE (B4) ----
+function drawVignette() {
+  if (currentLevel !== 2) return;
+  const bCount = decisions.filter(d => d.choice === 'B').length;
+  const intensity = 0.5 - bCount * 0.04; // more B answers = less darkness
+  // Dark corners
+  const grad = ctx.createRadialGradient(W / 2, H / 2, W * 0.3, W / 2, H / 2, W * 0.7);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, `rgba(0,0,0,${intensity})`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// ---- AMBIENT EMBERS (B4) ----
+function drawEmbers() {
+  if (currentLevel !== 2) return;
+  for (let i = 0; i < 12; i++) {
+    const x = ((i * 137 + frameCount * 0.3) % W);
+    const y = H - ((i * 89 + frameCount * 0.5) % H);
+    const alpha = 0.2 + Math.sin(frameCount * 0.02 + i) * 0.15;
+    const size = 1.5 + Math.sin(frameCount * 0.03 + i * 2) * 0.5;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#FF8844';
+    ctx.fillRect(x, y, size, size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---- GAUNTLET DARK WALL (B6) ----
+function drawGauntletWall() {
+  if (currentLevel !== 2 || !gauntlet.active) return;
+  const cx = camera.x;
+  const wallSx = gauntlet.wallX - cx;
+  // Dark wall from left edge
+  ctx.fillStyle = 'rgba(10,0,20,0.95)';
+  ctx.fillRect(0, 0, Math.max(0, wallSx), H);
+  // Edge glow
+  if (wallSx > 0 && wallSx < W) {
+    const grad = ctx.createLinearGradient(wallSx - 30, 0, wallSx + 10, 0);
+    grad.addColorStop(0, 'rgba(80,0,120,0)');
+    grad.addColorStop(0.7, 'rgba(80,0,120,0.5)');
+    grad.addColorStop(1, 'rgba(10,0,20,0.95)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(wallSx - 30, 0, 40, H);
+  }
+}
+
+// ---- GAUNTLET TIMED DECISIONS (B6) ----
+function drawGauntletDecisions() {
+  if (currentLevel !== 2 || !gauntlet.active || gauntlet.complete) return;
+  if (gauntlet.currentTD < 0 || gauntlet.currentTD >= gauntlet.timedDecisions.length) return;
+  const td = gauntlet.timedDecisions[gauntlet.currentTD];
+  if (td.chosen) return;
+
+  const timeLeft = gauntlet.tdTimer / td.timer;
+  // Decision bar at top
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillRect(50, 45, W - 100, 55);
+  ctx.strokeStyle = timeLeft > 0.3 ? '#FFD700' : '#FF4444';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(50, 45, W - 100, 55);
+
+  // Timer bar
+  ctx.fillStyle = timeLeft > 0.3 ? '#FFD700' : '#FF4444';
+  ctx.fillRect(55, 48, (W - 110) * timeLeft, 4);
+
+  // Question
+  ctx.fillStyle = '#FFF';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(td.question, W / 2, 65);
+
+  // Options
+  ctx.fillStyle = '#FF6644';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('[A] ' + td.optA, W / 2 - 150, 85);
+  ctx.fillStyle = '#4488FF';
+  ctx.fillText('[B] ' + td.optB, W / 2 + 150, 85);
+}
+
+// ---- GATES ----
+function drawGates() {
+  const cx = camera.x;
+  for (const g of level.gates) {
+    const sx = g.x - cx;
+    if (sx + g.w < 0 || sx > W) continue;
+
+    // Check if gate is locked
+    const locked = g.requires && (
+      (g.requires.heart && heart < g.requires.heart) ||
+      (g.requires.faith && faith < g.requires.faith)
+    );
+
+    // Gate frame — dimmed if locked
+    ctx.fillStyle = locked ? '#5A4A3A' : '#8B7355';
+    ctx.fillRect(sx, g.y, g.w, g.h);
+    ctx.fillStyle = locked ? '#2A1A10' : '#4A3520';
+    ctx.fillRect(sx + 4, g.y + 4, g.w - 8, g.h - 4);
+    // Arch top
+    ctx.fillStyle = locked ? '#5A4A3A' : '#8B7355';
+    ctx.beginPath();
+    ctx.arc(sx + g.w / 2, g.y, g.w / 2, Math.PI, 0);
+    ctx.fill();
+    ctx.fillStyle = locked ? '#2A1A10' : '#4A3520';
+    ctx.beginPath();
+    ctx.arc(sx + g.w / 2, g.y, g.w / 2 - 4, Math.PI, 0);
+    ctx.fill();
+
+    if (locked) {
+      // Red tint overlay
+      ctx.fillStyle = 'rgba(180,40,40,0.25)';
+      ctx.fillRect(sx, g.y, g.w, g.h);
+      // Padlock icon
+      ctx.fillStyle = '#AA4444';
+      ctx.fillRect(sx + g.w / 2 - 6, g.y + g.h / 2 - 2, 12, 10);
+      ctx.strokeStyle = '#AA4444';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx + g.w / 2, g.y + g.h / 2 - 2, 6, Math.PI, 0);
+      ctx.stroke();
+    } else {
+      // Glow for unlocked gates
+      const glow = Math.sin(frameCount * 0.05 + g.id) * 0.2 + 0.3;
+      ctx.fillStyle = `rgba(255,255,200,${glow})`;
+      ctx.fillRect(sx + 6, g.y + 6, g.w - 12, g.h - 8);
+    }
+
+    // Label above with dark backing
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    const lines = g.label.split('\n');
+    const labelH = lines.length * 16 + 10;
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(sx - 10, g.y - 30 - (lines.length - 1) * 16, g.w + 20, labelH);
+    ctx.fillStyle = locked ? '#AA6666' : '#FFD700';
+    lines.forEach((line, i) => {
+      ctx.fillText(line, sx + g.w / 2, g.y - 20 + i * 16 - (lines.length - 1) * 16);
+    });
+
+    // Requirement text below gate label
+    if (g.requires) {
+      let reqText = '';
+      if (g.requires.heart && g.requires.faith) reqText = `Requires: Connection ${g.requires.heart}+ & Identity ${g.requires.faith}+`;
+      else if (g.requires.faith) reqText = `Requires: Identity ${g.requires.faith}+`;
+      else if (g.requires.heart) reqText = `Requires: Connection ${g.requires.heart}+`;
+      ctx.font = '10px monospace';
+      ctx.fillStyle = locked ? '#FF6666' : '#88CC88';
+      ctx.fillText(reqText, sx + g.w / 2, g.y + g.h + 14);
+    }
+  }
+}
+
+// ---- HUD ----
+function drawHeartIcon(x, y, size, filled) {
+  ctx.fillStyle = filled ? '#FF8844' : '#442233';
+  ctx.beginPath();
+  const s = size / 2;
+  ctx.moveTo(x, y + s * 0.3);
+  ctx.bezierCurveTo(x, y - s * 0.3, x - s, y - s * 0.3, x - s, y + s * 0.1);
+  ctx.bezierCurveTo(x - s, y + s * 0.6, x, y + s, x, y + s * 1.2);
+  ctx.bezierCurveTo(x, y + s, x + s, y + s * 0.6, x + s, y + s * 0.1);
+  ctx.bezierCurveTo(x + s, y - s * 0.3, x, y - s * 0.3, x, y + s * 0.3);
+  ctx.fill();
+}
+
+function drawIdentityIcon(x, y, size, filled) {
+  ctx.fillStyle = filled ? '#22AAAA' : '#112233';
+  // Diamond shape for identity
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + size * 0.35, y + size * 0.5);
+  ctx.lineTo(x, y + size);
+  ctx.lineTo(x - size * 0.35, y + size * 0.5);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawCoinIcon(x, y, size, filled) {
+  ctx.fillStyle = filled ? '#44AA44' : '#223322';
+  ctx.font = 'bold ' + Math.round(size * 0.85) + 'px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('$', x, y + size * 0.75);
+  ctx.textAlign = 'left';
+}
+
+function drawHUD() {
+  // Background bar
+  ctx.fillStyle = COL.hudBg;
+  ctx.fillRect(0, 0, W, 56);
+
+  // Heart label + icons
+  drawPixelText('CONN', 10, 5, 9, '#FF8844');
+  const heartCount = Math.ceil(heart / 10);
+  for (let i = 0; i < 10; i++) {
+    drawHeartIcon(58 + i * 16, 4, 12, i < heartCount);
+  }
+
+  // Faith label + icons
+  drawPixelText('IDENT', 10, 19, 9, '#22AAAA');
+  for (let i = 0; i < 10; i++) {
+    drawIdentityIcon(58 + i * 16, 18, 12, i < Math.ceil(faith / 10));
+  }
+
+  // Money label + icons
+  drawPixelText('RSRC', 10, 33, 9, '#44AA44');
+  for (let i = 0; i < 10; i++) {
+    drawCoinIcon(58 + i * 16, 32, 12, i < Math.ceil(money / 10));
+  }
+
+  // Zone name + level
+  const zone = getZone(player.x);
+  const zoneNames = currentLevel === 1 ? ZONE_NAMES : ZONE_NAMES_L2;
+  drawPixelText('L' + currentLevel + '/2 — ' + zoneNames[zone], W / 2, 20, 16, COL.textYellow, 'center');
+
+  // Gate foreshadowing — show in zones 2-3
+  if (zone >= 2) {
+    const gates = level.gates;
+    let hintText = '';
+    if (gates[1] && gates[1].requires) {
+      const needH = gates[1].requires.heart || 0;
+      const needF = gates[1].requires.faith || 0;
+      if (needH && needF) hintText = 'Gate 2: Connection ' + needH + '+ & Identity ' + needF + '+';
+      else if (needF) hintText = 'Gate 2: Identity ' + needF + '+';
+    }
+    if (gates[2] && gates[2].requires) {
+      const needF = gates[2].requires.faith || 0;
+      if (needF) hintText += (hintText ? '  |  ' : '') + 'Gate 3: Identity ' + needF + '+';
+    }
+    if (hintText) {
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(W / 2 - 200, 46, 400, 14);
+      drawPixelText(hintText, W / 2, 47, 9, '#CCAA44', 'center');
+    }
+  }
+
+  // Trophy count
+  drawPixelText('Trophies: ' + trophyCount, W - 140, 5, 11, COL.trophy);
+
+  // Mute indicator (top-right)
+  ctx.fillStyle = Audio.isMuted() ? '#FF4444' : '#88CC88';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(Audio.isMuted() ? 'MUTED' : 'SND', W - 10, 15);
+  ctx.fillStyle = '#666';
+  ctx.font = '8px monospace';
+  ctx.fillText('[M]', W - 10, 26);
+
+}
+
+// ---- DECISION POPUP ----
+function drawDecisionPopup() {
+  if (!currentDecision || !currentDecision.questions) return;
+  const qi = currentDecision.currentQ;
+  if (qi >= currentDecision.questions.length) return;
+  const q = currentDecision.questions[qi];
+
+  // Overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Popup box
+  const pw = 700, ph = 300;
+  const px = (W - pw) / 2, py = (H - ph) / 2;
+
+  ctx.fillStyle = '#1A1A3A';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.strokeStyle = COL.qblock;
+  ctx.lineWidth = 4;
+  ctx.strokeRect(px, py, pw, ph);
+
+  // Timer bar — prominent at top with countdown
+  if (decisionEcho.timer <= 0 && decisionTimer > 0) {
+    const timerPct = decisionTimer / 480;
+    const barColor = timerPct < 0.25 ? '#FF4444' : timerPct < 0.5 ? '#FFAA22' : '#44AA44';
+    ctx.fillStyle = '#222';
+    ctx.fillRect(px + 10, py + 6, pw - 70, 10);
+    ctx.fillStyle = barColor;
+    ctx.fillRect(px + 10, py + 6, (pw - 70) * timerPct, 10);
+    // Countdown seconds
+    const secsLeft = Math.ceil(decisionTimer / 60);
+    ctx.fillStyle = timerPct < 0.25 ? '#FF4444' : '#FFF';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(secsLeft + 's', px + pw - 15, py + 16);
+    ctx.textAlign = 'center';
+    // Pulse urgency when low
+    if (decisionTimer < 180) {
+      const pulse = Math.sin(frameCount * 0.15) * 0.1 + 0.1;
+      ctx.fillStyle = 'rgba(255,50,50,' + pulse + ')';
+      ctx.fillRect(px, py, pw, ph);
+    }
+  }
+
+  // Difficulty badge + question counter
+  const diffColors = { Easy: '#44AA44', Hard: '#DD4444' };
+  ctx.fillStyle = diffColors[q.difficulty] || '#888';
+  ctx.fillRect(px + 20, py + 12, 70, 22);
+  ctx.fillStyle = '#FFF';
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(q.difficulty.toUpperCase(), px + 55, py + 27);
+
+  // Question counter
+  ctx.fillStyle = '#AAA';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText((qi + 1) + ' / ' + currentDecision.questions.length, px + pw - 25, py + 27);
+
+  // Question text
+  ctx.fillStyle = '#FFF';
+  ctx.font = '18px monospace';
+  ctx.textAlign = 'center';
+  // Word wrap if long
+  const words = q.question.split(' ');
+  let lines = [], line = '';
+  for (const w of words) {
+    if ((line + ' ' + w).length > 60) { lines.push(line); line = w; }
+    else { line = line ? line + ' ' + w : w; }
+  }
+  if (line) lines.push(line);
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], px + pw / 2, py + 58 + i * 20);
+  }
+  const optY = py + 58 + lines.length * 20 + 15;
+
+  // Option buttons — auto-size font to fit
+  const btnW = pw / 2 - 40;
+  const btnAx = px + 20, btnBx = px + pw / 2 + 20;
+  const textA = '[A] ' + q.optionA, textB = '[B] ' + q.optionB;
+  const optFont = Math.max(textA.length, textB.length) > 28 ? 'bold 12px monospace' : 'bold 14px monospace';
+
+  // Option A
+  ctx.fillStyle = '#FF6644';
+  ctx.fillRect(btnAx, optY, btnW, 50);
+  ctx.fillStyle = '#FFF';
+  ctx.font = optFont;
+  ctx.textAlign = 'center';
+  ctx.fillText(textA, btnAx + btnW / 2, optY + 28);
+
+  // Option B
+  ctx.fillStyle = '#4488FF';
+  ctx.fillRect(btnBx, optY, btnW, 50);
+  ctx.fillStyle = '#FFF';
+  ctx.font = optFont;
+  ctx.fillText(textB, btnBx + btnW / 2, optY + 28);
+
+  // Verse at bottom
+  ctx.fillStyle = '#BBA855';
+  ctx.font = 'italic 11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(currentDecision.verse, px + pw / 2, py + ph - 45);
+
+  // Instruction
+  ctx.fillStyle = '#999';
+  ctx.font = '12px monospace';
+  ctx.fillText('Tap A or B — or let time decide', px + pw / 2, py + ph - 20);
+}
+
+// ---- ECHO SCREEN ----
+function drawEcho() {
+  if (decisionEcho.timer <= 0) return;
+  const fadeAlpha = Math.min(1, decisionEcho.timer / 30);
+  // Solid black background — fully covers the decision popup
+  ctx.fillStyle = '#0A0A2A';
+  ctx.fillRect(0, 0, W, H);
+  const alpha = fadeAlpha;
+
+  const echoColor = decisionEcho.choice === 'S' ? '#888888' : decisionEcho.choice === 'B' ? '#FFD700' : '#FF8866';
+
+  ctx.fillStyle = `rgba(255,215,0,${alpha})`;
+  ctx.font = 'italic bold 26px monospace';
+  ctx.textAlign = 'center';
+  const lastDec = decisions[decisions.length - 1];
+  const diff = lastDec ? lastDec.difficulty : 'Easy';
+  const echoByDiff = {
+    Easy:   ['A semester later...', 'That winter break...', 'By spring...', 'Months pass...'],
+    Hard:   ['Years later, back home...', 'One night you realize...', 'Looking at old photos...', 'When someone asks about your time abroad...']
+  };
+  const pool = echoByDiff[diff] || echoByDiff.Easy;
+  ctx.fillText(pool[decisions.length % pool.length], W / 2, H / 2 - 40);
+
+  const rgb = echoColor === '#888888' ? '136,136,136' : echoColor === '#FFD700' ? '255,215,0' : '255,136,102';
+  ctx.fillStyle = `rgba(${rgb},${alpha})`;
+  ctx.font = '18px monospace';
+  const words = decisionEcho.text.split(' ');
+  let lines = [], line = '';
+  for (const w of words) {
+    if ((line + ' ' + w).length > 55) { lines.push(line); line = w; }
+    else { line = line ? line + ' ' + w : w; }
+  }
+  if (line) lines.push(line);
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], W / 2, H / 2 + i * 22);
+  }
+
+  if (decisionEcho.choice === 'S') {
+    ctx.fillStyle = `rgba(100,100,100,${alpha * 0.7})`;
+    ctx.font = 'italic 15px monospace';
+    ctx.fillText('You said nothing. Life moved on.', W / 2, H / 2 + lines.length * 22 + 25);
+  }
+
+  // Meter delta overlay
+  if (meterDelta.timer > 0) {
+    const dAlpha = Math.min(1, meterDelta.timer / 30) * alpha;
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    const deltaY = H / 2 + lines.length * 22 + 50;
+    if (meterDelta.heart !== 0) {
+      ctx.fillStyle = meterDelta.heart > 0 ? 'rgba(255,100,120,' + dAlpha + ')' : 'rgba(180,60,80,' + dAlpha + ')';
+      ctx.fillText((meterDelta.heart > 0 ? '+' : '') + meterDelta.heart + ' Connection', W / 2 - 120, deltaY);
+    }
+    if (meterDelta.faith !== 0) {
+      ctx.fillStyle = meterDelta.faith > 0 ? 'rgba(100,150,255,' + dAlpha + ')' : 'rgba(60,80,180,' + dAlpha + ')';
+      ctx.fillText((meterDelta.faith > 0 ? '+' : '') + meterDelta.faith + ' Identity', W / 2, deltaY);
+    }
+    if (meterDelta.money !== 0) {
+      ctx.fillStyle = meterDelta.money > 0 ? 'rgba(68,170,68,' + dAlpha + ')' : 'rgba(40,100,40,' + dAlpha + ')';
+      ctx.fillText((meterDelta.money > 0 ? '+' : '') + meterDelta.money + ' Resources', W / 2 + 120, deltaY);
+    }
+  }
+
+  // "Press to continue" hint — visible and clear after minimum read time
+  const minRead = decisionEcho.choice === 'S' ? 240 : 180;
+  if (decisionEcho.timer < minRead) {
+    const promptAlpha = 0.6 + Math.sin(frameCount * 0.08) * 0.3;
+    ctx.fillStyle = 'rgba(220,220,220,' + (promptAlpha * alpha) + ')';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('Press ENTER to continue', W / 2, H - 35);
+  }
+}
+
+// ---- JOURNAL SCREEN ----
+function drawJournal() {
+  if (!journalActive) return;
+  ctx.fillStyle = 'rgba(5,5,20,0.95)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 24px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(getPlayerNames()[playerNameIdx].toUpperCase() + '\'S REFLECTION', W / 2, 50);
+
+  ctx.fillStyle = '#999';
+  ctx.font = 'italic 12px monospace';
+  ctx.fillText('These aren\'t game questions. These are real ones.', W / 2, 75);
+
+  let prompts = [];
+
+  const aChoices = decisions.filter(d => d.choice === 'A').length;
+  const bChoices = decisions.filter(d => d.choice === 'B').length;
+  const sChoices = decisions.filter(d => d.choice === 'S').length;
+  const hardChoices = decisions.filter(d => d.difficulty === 'Hard');
+  const hardSafe = hardChoices.filter(d => d.choice === 'A').length;
+  const gateId = endGate ? endGate.id : 1;
+
+  if (sChoices >= 3) {
+    prompts.push("You stayed silent " + sChoices + " times. What decision in your real life are you avoiding right now?");
+  } else if (sChoices >= 1) {
+    prompts.push("You let the timer run out " + sChoices + " time" + (sChoices > 1 ? 's' : '') + ". Is there something you're waiting to feel 'ready' for?");
+  }
+
+  if (aChoices > bChoices + 3) {
+    prompts.push("You chose security over risk most of the time. What would you do if you knew you couldn't fail?");
+  } else if (bChoices > aChoices + 3) {
+    prompts.push("You chose courage repeatedly. What's one area of your life where you're still holding back?");
+  } else {
+    prompts.push("Your choices were mixed — sometimes safe, sometimes bold. What pattern do you see in your real decisions?");
+  }
+
+  if (hardSafe >= 3) {
+    prompts.push("On the hardest questions, you played it safe. What would 'trusting the process' look like for you this week?");
+  } else if (hardSafe === 0 && hardChoices.length > 0) {
+    prompts.push("You chose courage on every hard question. Where did that courage come from — and where do you need it next?");
+  }
+
+  if (gateId === 0) {
+    prompts.push("You chose comfort. Is there a dream you've shelved because the cost felt too high?");
+  } else if (gateId === 2) {
+    prompts.push("You chose to bridge two worlds. If that were literally true tomorrow, what would you need to let go of?");
+  }
+
+  if (heart > 70 && faith < 40) {
+    prompts.push("You cared about people but your identity wavered. Who in your life could you be more honest with about your doubts?");
+  } else if (faith > 70 && heart < 40) {
+    prompts.push("Your identity was strong but your connections suffered. Who have you been too busy to really know?");
+  }
+
+  prompts = prompts.slice(0, 3);
+  if (prompts.length === 0) {
+    prompts.push("What surprised you most about the choices you made?");
+  }
+
+  let py = 110;
+  for (let i = 0; i < prompts.length; i++) {
+    ctx.fillStyle = '#FFD700';
+    ctx.beginPath();
+    ctx.arc(80, py + 8, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#0A0A2A';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(i + 1, 80, py + 13);
+
+    ctx.fillStyle = '#DDD';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'left';
+    const words = prompts[i].split(' ');
+    let lines = [], line = '';
+    for (const w of words) {
+      if ((line + ' ' + w).length > 65) { lines.push(line); line = w; }
+      else { line = line ? line + ' ' + w : w; }
+    }
+    if (line) lines.push(line);
+    for (let j = 0; j < lines.length; j++) {
+      ctx.fillText(lines[j], 110, py + 8 + j * 20);
+    }
+    py += lines.length * 20 + 35;
+  }
+
+  ctx.fillStyle = '#666';
+  ctx.font = 'italic 12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('Take a moment. These questions don\'t have points.', W / 2, H - 85);
+
+  // Copy prompts button
+  ctx.fillStyle = '#3A4A5A';
+  ctx.fillRect(W / 2 - 95, H - 73, 190, 22);
+  ctx.fillStyle = '#CCC';
+  ctx.font = '11px monospace';
+  ctx.fillText('Press C to copy prompts', W / 2, H - 58);
+
+  if (restartConfirm) {
+    ctx.fillStyle = '#FF6644';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText('Restart? Press R again to confirm, N to cancel', W / 2, H - 30);
+  } else if (Math.floor(frameCount / 30) % 2 === 0) {
+    ctx.fillStyle = '#AAA';
+    ctx.font = '14px monospace';
+    ctx.fillText('Press R to play again', W / 2, H - 30);
+  }
+}
+
+// ---- MENU SCREEN ----
+function drawMenu() {
+  // Sky
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#4A6AFF');
+  grad.addColorStop(1, '#9BB8FF');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Animated clouds
+  for (let i = 0; i < 6; i++) {
+    const cx = ((i * 200 + frameCount * 0.3) % (W + 200)) - 100;
+    const cy = 60 + i * 30;
+    ctx.fillStyle = '#FFF';
+    drawCloudShape(cx, cy, 60 + i * 10);
+  }
+
+  // Ground
+  drawBrickBlock(0, H - 64, W, 64);
+  ctx.fillStyle = '#55BB33';
+  ctx.fillRect(0, H - 64, W, 3);
+
+  // Title
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.font = 'bold 64px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('CROSSINGS', W / 2 + 3, 113);
+
+  ctx.fillStyle = COL.textYellow;
+  ctx.font = 'bold 64px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('CROSSINGS', W / 2, 110);
+
+  // Hook line
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = '#FFF';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('16 decisions. 2 levels. Will you cross?', W / 2, 170);
+  ctx.restore();
+
+  // Subtitle
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = '#EEF';
+  ctx.font = '14px monospace';
+  ctx.fillText('An international student\'s journey of identity, belonging, and home', W / 2, 200);
+  ctx.restore();
+
+  // Start prompt (blink)
+  if (Math.floor(frameCount / 30) % 2 === 0) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.9)';
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText(isMobile ? 'TAP TO START' : 'Press ENTER to start', W / 2, 260);
+    ctx.restore();
+  }
+
+  // Subtle dark band behind lower info
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(0, 285, W, 85);
+
+  // Level info
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = '#CCD';
+  ctx.font = '11px monospace';
+  ctx.fillText('2 Levels  •  16 Decisions  •  Your story abroad', W / 2, 300);
+  ctx.restore();
+
+  // Controls hint
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = '#AABBDD';
+  ctx.font = '10px monospace';
+  ctx.fillText(isMobile ? 'On-screen buttons to move  •  Tap A/B for decisions' : 'Arrow keys / Space to move  •  A/B for decisions  •  M mute  •  ESC pause', W / 2, 328);
+  ctx.restore();
+
+  // Character selection
+  const genderLabel = characterGender === 0 ? 'Boy' : 'Girl';
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = '#AABBDD';
+  ctx.font = '10px monospace';
+  ctx.fillText('\u2191\u2193 ' + genderLabel, W / 2, 356);
+  ctx.restore();
+
+  // Mobile gender toggle tap targets
+  if (isMobile) {
+    const gx = W / 2, gy = 348;
+    // Up arrow
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.beginPath(); ctx.moveTo(gx - 50, gy - 4); ctx.lineTo(gx - 42, gy - 14); ctx.lineTo(gx - 34, gy - 4); ctx.fill();
+    // Down arrow
+    ctx.beginPath(); ctx.moveTo(gx - 50, gy + 4); ctx.lineTo(gx - 42, gy + 14); ctx.lineTo(gx - 34, gy + 4); ctx.fill();
+  }
+
+  // Attribution
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = '#BBCCDD';
+  ctx.font = '11px monospace';
+  ctx.fillText('A Frontier Commons experience', W / 2, H - 78);
+  ctx.restore();
+
+  // Small character standing on ground (uses selected skin + gender)
+  const skinData = CHARACTER_SKINS[characterSkin];
+  const px = W / 2 - 10, py = H - 64 - 28;
+  const isG = characterGender === 1;
+  ctx.fillStyle = skinData.hair; ctx.fillRect(px + 4, py, 12, 3);
+  if (isG) { ctx.fillRect(px + 2, py, 2, 8); ctx.fillRect(px + 16, py, 2, 8); ctx.fillRect(px + 15, py + 1, 3, 4); ctx.fillRect(px + 14, py + 5, 3, 3); }
+  ctx.fillStyle = skinData.skin; ctx.fillRect(px + 4, py + 3, 12, 7);
+  ctx.fillStyle = '#000'; ctx.fillRect(px + 11, py + 5, 2, 2);
+  ctx.fillStyle = isG ? '#CC3366' : '#3366CC'; ctx.fillRect(px + 3, py + 10, 14, 8);
+  ctx.fillStyle = skinData.skin; ctx.fillRect(px, py + 11, 3, 7); ctx.fillRect(px + 17, py + 11, 3, 7);
+  if (isG) { ctx.fillStyle = '#554466'; ctx.fillRect(px + 2, py + 18, 16, 5); ctx.fillRect(px + 4, py + 23, 5, 1); ctx.fillRect(px + 11, py + 23, 5, 1); }
+  else { ctx.fillStyle = '#444466'; ctx.fillRect(px + 4, py + 18, 5, 6); ctx.fillRect(px + 11, py + 18, 5, 6); }
+  ctx.fillStyle = isG ? '#884422' : '#663300'; ctx.fillRect(px + 3, py + 24, 6, 4); ctx.fillRect(px + 11, py + 24, 6, 4);
+}
+
+// ---- LEVEL COMPLETE SCREEN ----
+function drawLevelComplete() {
+  ctx.fillStyle = 'rgba(10,10,30,0.9)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+
+  // Title
+  ctx.fillStyle = COL.textYellow;
+  ctx.font = 'bold 36px monospace';
+  ctx.fillText('LEVEL 1 COMPLETE', W / 2, 100);
+
+  // Gate chosen
+  ctx.fillStyle = '#FFF';
+  ctx.font = '16px monospace';
+  if (endGate) {
+    ctx.fillText('You chose: ' + endGate.label.replace('\n', ' '), W / 2, 150);
+  }
+
+  // Meters
+  ctx.fillStyle = '#AAA';
+  ctx.font = '14px monospace';
+  ctx.fillText('Connection: ' + Math.round(heart) + '%', W / 2 - 150, 200);
+  ctx.fillText('Identity: ' + Math.round(faith) + '%', W / 2, 200);
+  ctx.fillText('Resources: ' + Math.round(money) + '%', W / 2 + 150, 200);
+
+  // Meter bars
+  ctx.fillStyle = '#333'; ctx.fillRect(W/2 - 210, 215, 100, 12); ctx.fillRect(W/2 - 50, 215, 100, 12); ctx.fillRect(W/2 + 110, 215, 100, 12);
+  ctx.fillStyle = COL.hudHeart; ctx.fillRect(W/2 - 210, 215, heart, 12);
+  ctx.fillStyle = COL.hudFaith; ctx.fillRect(W/2 - 50, 215, faith, 12);
+  ctx.fillStyle = COL.hudMoney; ctx.fillRect(W/2 + 110, 215, money, 12);
+
+  // Mission quote based on heart/faith ranges
+  let missionQuote = '';
+  if (heart > 70 && faith > 70) {
+    missionQuote = '"Home is not where you live but where they understand you." — Christian Morgenstern';
+  } else if (heart > 70 && faith <= 40) {
+    missionQuote = '"A ship in harbor is safe, but that is not what ships are built for." — John A. Shedd';
+  } else if (faith > 70 && heart <= 40) {
+    missionQuote = '"If you want to go fast, go alone. If you want to go far, go together." — African Proverb';
+  } else if (heart <= 30 && faith <= 30) {
+    missionQuote = '"You are never too old to set another goal or to dream a new dream." — C.S. Lewis';
+  } else if (faith > 50) {
+    missionQuote = '"The real voyage of discovery consists not in seeking new landscapes, but in having new eyes." — Marcel Proust';
+  } else if (heart > 50) {
+    missionQuote = '"You can never go home again, but the truth is you can never leave home." — Maya Angelou';
+  } else {
+    missionQuote = '"Not all those who wander are lost." — J.R.R. Tolkien';
+  }
+
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'italic 12px monospace';
+  const qWords = missionQuote.split(' ');
+  let qLines = [], qLine = '';
+  for (const w of qWords) { if ((qLine + ' ' + w).length > 70) { qLines.push(qLine); qLine = w; } else { qLine = qLine ? qLine + ' ' + w : w; } }
+  if (qLine) qLines.push(qLine);
+  for (let i = 0; i < qLines.length; i++) ctx.fillText(qLines[i], W / 2, 270 + i * 18);
+
+  // Continue message + L2 preview
+  ctx.fillStyle = '#CCC';
+  ctx.font = '14px monospace';
+  ctx.fillText('Your journey continues... The deeper questions await.', W / 2, 270 + qLines.length * 18 + 25);
+
+  // L2 feature preview
+  ctx.fillStyle = '#AAA';
+  ctx.font = '11px monospace';
+  ctx.fillText('Fog narrows your vision  •  Gravity shifts with your connections  •  Obstacles evolve', W / 2, 270 + qLines.length * 18 + 48);
+
+  if (levelCompleteTimer > 60 && Math.floor(frameCount / 30) % 2 === 0) {
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 18px monospace';
+    ctx.fillText('Press ENTER for Level 2', W / 2, 270 + qLines.length * 18 + 70);
+  }
+}
+
+// ---- END SCREEN ----
+function drawEndScreen() {
+  ctx.fillStyle = '#0A0A2A';
+  ctx.fillRect(0, 0, W, H);
+
+  // Decorative border
+  ctx.strokeStyle = COL.qblock;
+  ctx.lineWidth = 4;
+  ctx.strokeRect(20, 20, W - 40, H - 40);
+
+  // Header — personalized with player name
+  const pName = getPlayerNames()[playerNameIdx];
+  ctx.fillStyle = COL.textYellow;
+  ctx.font = 'bold 32px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(pName.toUpperCase() + '\'S JOURNEY', W / 2, 55);
+
+  // Gate chosen
+  const gateNames = ['Went back home early', 'Graduated & stayed connected', 'Bridge two worlds forever'];
+  const gateName = endGate ? gateNames[endGate.id] : 'Unknown';
+
+  // Journey path visualization (C2)
+  const pathY = 85;
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(80, pathY);
+  ctx.lineTo(W - 80, pathY);
+  ctx.stroke();
+
+  // Decision points along the path
+  const totalDec = decisions.length;
+  for (let i = 0; i < totalDec; i++) {
+    const dx = 80 + ((W - 160) / (totalDec + 1)) * (i + 1);
+    const d = decisions[i];
+    const col = d.choice === 'S' ? '#888888' : d.choice === 'B' ? '#66AAFF' : '#FF8866';
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(dx, pathY, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#AAA';
+    ctx.font = '8px monospace';
+    ctx.fillText(i + 1, dx, pathY + 16);
+  }
+  // Gate icon at end
+  ctx.fillStyle = '#FFD700';
+  ctx.fillRect(W - 85, pathY - 10, 12, 20);
+  ctx.fillStyle = '#FFF';
+  ctx.font = '9px monospace';
+  ctx.fillText(gateName, W - 80, pathY + 28);
+
+  // Heart, Faith & Money bars
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#AA0000';
+  ctx.fillRect(30, 115, 150, 14);
+  ctx.fillStyle = COL.hudHeart;
+  ctx.fillRect(32, 117, heart * 1.46, 10);
+  ctx.fillStyle = '#FFF';
+  ctx.font = '11px monospace';
+  ctx.fillText('Connection: ' + Math.round(heart), 188, 126);
+
+  ctx.fillStyle = '#002266';
+  ctx.fillRect(270, 115, 150, 14);
+  ctx.fillStyle = COL.hudFaith;
+  ctx.fillRect(272, 117, faith * 1.46, 10);
+  ctx.fillText('Identity: ' + Math.round(faith), 428, 126);
+
+  ctx.fillStyle = '#224422';
+  ctx.fillRect(510, 115, 150, 14);
+  ctx.fillStyle = COL.hudMoney;
+  ctx.fillRect(512, 117, money * 1.46, 10);
+  ctx.fillText('Resources: ' + Math.round(money), 668, 126);
+
+  // Synthesized narrative paragraph (C2)
+  ctx.textAlign = 'center';
+  let narrative = '';
+  const gateId = endGate ? endGate.id : 1;
+  const bChoices = decisions.filter(d => d.choice === 'B').length;
+  const faithDriven = bChoices >= 5;
+  const fearDriven = bChoices <= 3;
+
+  if (heart > 70 && faith > 70 && gateId === 2) {
+    narrative = pName + "'s journey was one of deep connection and unshakable identity. " + pName + " crossed cultures, built bridges, and found home in the space between two worlds. When the fog closed in, belonging lit the way. " + pName + " didn't just survive abroad — " + pName + " became someone who makes others feel they belong too.";
+  } else if (heart > 70 && faith > 70) {
+    narrative = pName + " carried both connection and identity through every storm. Friendships sustained, culture honored. The inner journey refined what the outer journey began. " + pName + " is ready — not because of perfection, but because of roots that grew in two directions.";
+  } else if (faith > 60 && heart < 40) {
+    narrative = pName + "'s identity burned bright, but the cost was steep. Somewhere along the way, the people closest felt distant. Knowing who you are matters — but so does letting others in. A bridge needs both sides.";
+  } else if (heart > 60 && faith < 40) {
+    narrative = pName + " connected deeply with people, but the cultural anchor felt loose. That warmth is a gift — but without identity to root it, the waves of assimilation may pull from the path. The door between two worlds is still open.";
+  } else if (money > 70 && faith < 40) {
+    narrative = pName + " built financial security — but at what cost? The bank account grew while the sense of self went quiet. Resources answered every question except the one that mattered: who am I becoming?";
+  } else if (money < 20 && faith > 60) {
+    narrative = pName + " gave up financial security for something money can't buy — a clear sense of identity. The world calls it risky. " + pName + " calls it freedom. The account is thin, but the story is full.";
+  } else if (fearDriven) {
+    narrative = "Fear spoke louder than courage on " + pName + "'s journey. The safe choices piled up, and the fog grew thicker. But here's the truth: " + pName + " is still here, still standing at the end. The story isn't over. Belonging isn't the absence of fear — it's the next conversation.";
+  } else if (faithDriven && gateId === 2) {
+    narrative = pName + " chose the harder road again and again. Not every choice was easy, and not every step was certain — but " + pName + " moved. Through homesickness, through pressure, through isolation — kept going. That's what a bridge-builder does.";
+  } else {
+    narrative = pName + "'s path was winding — sometimes brave, sometimes hesitant. That's honest. The inner journey revealed what the outer one couldn't: that belonging isn't a single moment, but a series of small choices. The question was never 'Do you fit in?' It was always 'Will you cross?'";
+  }
+
+  // Wrap narrative text
+  ctx.fillStyle = '#DDD';
+  ctx.font = '13px monospace';
+  const words = narrative.split(' ');
+  let lines = [];
+  let line = '';
+  for (const word of words) {
+    if ((line + ' ' + word).length > 75) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = line ? line + ' ' + word : word;
+    }
+  }
+  if (line) lines.push(line);
+
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], W / 2, 155 + i * 20);
+  }
+
+  // Gauntlet decisions summary
+  let gy = 155 + lines.length * 20 + 15;
+  if (gauntlet.timedDecisions && gauntlet.timedDecisions.length > 0) {
+    ctx.fillStyle = '#FFD700';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText('Courage Gauntlet:', W / 2, gy);
+    gy += 16;
+    ctx.font = '10px monospace';
+    for (const td of gauntlet.timedDecisions) {
+      const col = td.chosen === 'B' ? '#66AAFF' : '#FF8866';
+      ctx.fillStyle = col;
+      const choiceText = td.chosen === 'B' ? td.optB : td.optA;
+      ctx.fillText(td.question.substring(0, 50) + ' → ' + choiceText, W / 2, gy);
+      gy += 14;
+    }
+  }
+
+  // Final reflection
+  let reflectionY = Math.min(gy + 20, H - 115);
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 14px monospace';
+  const finalWords = gateId === 2 ? '"Home is not where you live but where they understand you." — Christian Morgenstern' :
+                     gateId === 1 ? '"The real voyage of discovery consists not in seeking new landscapes, but in having new eyes." — Marcel Proust' :
+                     '"You can never go home again, but the truth is you can never leave home." — Maya Angelou';
+  ctx.fillText(finalWords, W / 2, reflectionY);
+
+  // Share button
+  if (copyFeedback.timer > 0) {
+    ctx.fillStyle = '#2A5A2A';
+    ctx.fillRect(W / 2 - 100, reflectionY + 18, 200, 22);
+    ctx.fillStyle = '#88FF88';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText(copyFeedback.text, W / 2, reflectionY + 33);
+  } else {
+    ctx.fillStyle = '#3A4A5A';
+    ctx.fillRect(W / 2 - 100, reflectionY + 18, 200, 22);
+    ctx.fillStyle = '#CCC';
+    ctx.font = '11px monospace';
+    ctx.fillText('Press S to copy journey summary', W / 2, reflectionY + 33);
+  }
+
+  // Post-game CTA
+  ctx.fillStyle = '#8899BB';
+  ctx.font = '12px monospace';
+  ctx.fillText('Want to go deeper? Visit frontiercommons.org', W / 2, H - 70);
+
+  // Attribution
+  ctx.fillStyle = '#556677';
+  ctx.font = '10px monospace';
+  ctx.fillText('A Frontier Commons experience', W / 2, H - 55);
+
+  // Restart / Reflect
+  if (restartConfirm) {
+    ctx.fillStyle = '#FF6644';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText('Restart? Press R again to confirm, N to cancel', W / 2, H - 30);
+  } else if (Math.floor(frameCount / 30) % 2 === 0) {
+    ctx.fillStyle = '#AAA';
+    ctx.font = '14px monospace';
+    ctx.fillText(journalActive ? 'Press R to play again' : 'Press R to reflect', W / 2, H - 30);
+  }
+}
+
+// ---- MOBILE TOUCH BUTTON RENDERING ----
+function drawTouchControls() {
+  if (!isMobile) return;
+
+  // During DECISION (active popup), hide movement buttons
+  if (state === STATE.DECISION && decisionSlowmo <= 0) return;
+
+  // Build set of currently pressed button names
+  const pressed = {};
+  for (const id in activeTouches) { if (activeTouches[id]) pressed[activeTouches[id]] = true; }
+
+  for (const name in touchBtns) {
+    const b = touchBtns[name];
+    const alpha = pressed[name] ? 0.4 : 0.25;
+    // Button background
+    ctx.fillStyle = 'rgba(255,255,255,' + alpha + ')';
+    ctx.strokeStyle = 'rgba(255,255,255,' + (alpha + 0.1) + ')';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(b.x, b.y, b.w, b.h, 12);
+    ctx.fill();
+    ctx.stroke();
+    // Icon
+    ctx.fillStyle = 'rgba(255,255,255,' + (alpha + 0.3) + ')';
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    ctx.beginPath();
+    if (name === 'left') {
+      ctx.moveTo(cx + 12, cy - 14); ctx.lineTo(cx - 12, cy); ctx.lineTo(cx + 12, cy + 14);
+    } else if (name === 'right') {
+      ctx.moveTo(cx - 12, cy - 14); ctx.lineTo(cx + 12, cy); ctx.lineTo(cx - 12, cy + 14);
+    } else if (name === 'jump') {
+      ctx.moveTo(cx, cy - 16); ctx.lineTo(cx + 16, cy + 10); ctx.lineTo(cx - 16, cy + 10);
+    }
+    ctx.fill();
+  }
+}
+
+// ============================================================
+// MAIN RENDER
+// ============================================================
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  if (state === STATE.MENU) {
+    drawMenu();
+    if (fadeTransition.alpha > 0) {
+      ctx.fillStyle = 'rgba(0,0,0,' + fadeTransition.alpha + ')';
+      ctx.fillRect(0, 0, W, H);
+      fadeTransition.alpha = Math.max(0, fadeTransition.alpha - 0.04);
+    }
+    return;
+  }
+
+  if (state === STATE.LEVEL_COMPLETE) {
+    drawLevelComplete();
+    if (fadeTransition.alpha > 0) {
+      ctx.fillStyle = 'rgba(0,0,0,' + fadeTransition.alpha + ')';
+      ctx.fillRect(0, 0, W, H);
+      fadeTransition.alpha = Math.max(0, fadeTransition.alpha - 0.04);
+    }
+    return;
+  }
+
+  if (state === STATE.END) {
+    drawEndScreen();
+    drawJournal();
+    // Fade transition
+    if (fadeTransition.alpha > 0) {
+      ctx.fillStyle = 'rgba(0,0,0,' + fadeTransition.alpha + ')';
+      ctx.fillRect(0, 0, W, H);
+      fadeTransition.alpha = Math.max(0, fadeTransition.alpha - 0.04);
+    }
+    return;
+  }
+
+  if (state === STATE.PAUSED) {
+    // Draw game world frozen underneath
+    drawSky();
+    drawSkyMood();
+    drawClouds();
+    drawHills();
+    drawBackgrounds();
+    drawGauntletWall();
+    drawGroundAndPlatforms();
+    drawFootprints();
+    drawQuestionBlocks();
+    drawCollectibles();
+    drawGates();
+    drawEnemies();
+    drawShadow();
+    drawPlayer();
+    drawEmbers();
+    drawFog();
+    drawVignette();
+    drawLifeBoundary();
+    drawHUD();
+    // Pause overlay
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#FFD700';
+    ctx.font = 'bold 36px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('PAUSED', W / 2, H / 2 - 20);
+    ctx.fillStyle = '#CCC';
+    ctx.font = '16px monospace';
+    ctx.fillText(isMobile ? 'Tap to resume' : 'Press ESC or P to resume', W / 2, H / 2 + 20);
+    ctx.fillStyle = '#999';
+    ctx.font = '12px monospace';
+    ctx.fillText('M — Toggle mute', W / 2, H / 2 + 50);
+    return;
+  }
+
+  // Screen shake (A4)
+  ctx.save();
+  if (screenShake.frames > 0) {
+    const sx = (Math.random() - 0.5) * screenShake.intensity * 2;
+    const sy = (Math.random() - 0.5) * screenShake.intensity * 2;
+    ctx.translate(sx, sy);
+  }
+
+  // Playing or Decision
+  drawSky();
+  drawSkyMood();
+  drawClouds();
+  drawHills();
+  drawBackgrounds();
+  drawGauntletWall();
+  drawGroundAndPlatforms();
+  drawFootprints();
+  drawQuestionBlocks();
+  drawCollectibles();
+  drawGates();
+  drawEnemies();
+  drawShadow();
+  drawPlayer();
+  drawParticles();
+  drawScorePopups();
+  drawEmbers();
+  drawFog();
+  drawVignette();
+  drawLifeBoundary();
+  drawGateStillness();
+  drawHUD();
+  drawGauntletDecisions();
+  drawZoneQuote();
+  drawLifeEvent();
+
+  ctx.restore();
+
+  if (state === STATE.DECISION) {
+    if (decisionSlowmo > 0) {
+      // Slow-mo: world visible, progressively darkening
+      const progress = 1 - (decisionSlowmo / 45);
+      ctx.fillStyle = 'rgba(10,10,30,' + (progress * 0.85) + ')';
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      drawDecisionPopup();
+      drawEcho();
+    }
+  }
+
+  // Gauntlet intro overlay
+  if (gauntletIntro.active && gauntletIntro.timer > 0) {
+    const gAlpha = Math.min(1, gauntletIntro.timer / 30);
+    ctx.fillStyle = 'rgba(10,0,20,' + (gAlpha * 0.8) + ')';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(255,215,0,' + gAlpha + ')';
+    ctx.font = 'bold 28px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('THE GAUNTLET BEGINS...', W / 2, H / 2 - 10);
+    ctx.fillStyle = 'rgba(200,200,200,' + (gAlpha * 0.7) + ')';
+    ctx.font = '14px monospace';
+    ctx.fillText('Run forward. Choose fast. Don\'t look back.', W / 2, H / 2 + 25);
+  }
+
+  // Fade transition
+  if (fadeTransition.alpha > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,' + fadeTransition.alpha + ')';
+    ctx.fillRect(0, 0, W, H);
+    fadeTransition.alpha = Math.max(0, fadeTransition.alpha - 0.04);
+  }
+
+  drawTouchControls();
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>
