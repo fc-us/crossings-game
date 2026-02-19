@@ -2496,9 +2496,9 @@ function drawCollectibles() {
     const bob = Math.sin(frameCount * 0.05 + c.bobOffset) * 4;
     const cy = c.y + bob;
 
-    if (c.type === 'heart') {
+    if (c.type === 'connection') {
       drawHandshake(sx, cy, 14, COL.heart);
-    } else if (c.type === 'cross') {
+    } else if (c.type === 'passport') {
       drawPassport(sx, cy, 14, COL.cross);
     } else if (c.type === 'globe') {
       drawGlobe(sx, cy, 7, COL.globe);
