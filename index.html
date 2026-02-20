@@ -3,6 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="description" content="A Mario-style platformer about the international student experience. 16 decisions. 2 levels. Will you cross?">
+<meta property="og:title" content="Crossings">
+<meta property="og:description" content="An international student's journey of identity, belonging, and home. 16 decisions. 2 levels. Will you cross?">
+<meta property="og:image" content="og.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Crossings">
+<meta name="twitter:description" content="A Mario-style platformer about the international student experience.">
+<meta name="twitter:image" content="og.png">
 <title>Crossings</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -52,7 +61,7 @@ const CAMERA_LERP = 0.08;
 const INVINCIBILITY_FRAMES = 60;
 
 // Game states
-const STATE = { MENU: 0, PLAYING: 1, DECISION: 2, END: 3, LEVEL_COMPLETE: 4, PAUSED: 5 };
+const STATE = { MENU: 0, PLAYING: 1, DECISION: 2, END: 3, LEVEL_COMPLETE: 4, PAUSED: 5, HELP: 6 };
 
 // ============================================================
 // AUDIO — Chiptune music & SFX via Web Audio API
@@ -454,6 +463,8 @@ canvasEl.addEventListener('click', e => {
     } else {
       justPressed['Enter'] = true;
     }
+  } else if (state === STATE.HELP) {
+    state = STATE.MENU;
   } else if (state === STATE.PAUSED) {
     state = pausedFrom || STATE.PLAYING;
     pausedFrom = null;
@@ -1248,9 +1259,17 @@ function update() {
     return;
   }
 
+  if (state === STATE.HELP) {
+    frameCount++;
+    if (consumePress('Escape') || consumePress('KeyH') || consumePress('Enter')) state = STATE.MENU;
+    clearJustPressed();
+    return;
+  }
+
   if (state === STATE.MENU) {
     frameCount++;
     if (consumePress('ArrowUp') || consumePress('ArrowDown')) characterGender = characterGender === 0 ? 1 : 0;
+    if (consumePress('KeyH')) { state = STATE.HELP; clearJustPressed(); return; }
     if (consumePress('Enter')) startGame();
     clearJustPressed();
     return;
@@ -3791,7 +3810,7 @@ function drawMenu() {
   ctx.shadowBlur = 6;
   ctx.fillStyle = '#AABBDD';
   ctx.font = '10px monospace';
-  ctx.fillText(isMobile ? 'On-screen buttons to move  •  Tap A/B for decisions' : 'Arrow keys / Space to move  •  A/B for decisions  •  M mute  •  ESC pause', W / 2, 328);
+  ctx.fillText(isMobile ? 'On-screen buttons to move  •  Tap A/B for decisions' : 'Arrow keys / Space to move  •  A/B for decisions  •  M mute  •  ESC pause  •  H help', W / 2, 328);
   ctx.restore();
 
   // Character selection
@@ -4140,11 +4159,119 @@ function drawTouchControls() {
   }
 }
 
+// ---- HELP SCREEN ----
+function drawHelp() {
+  ctx.fillStyle = '#0A0A2A';
+  ctx.fillRect(0, 0, W, H);
+
+  const cx = W / 2;
+  ctx.textAlign = 'center';
+
+  // Title
+  ctx.fillStyle = COL.textYellow;
+  ctx.font = 'bold 28px monospace';
+  ctx.fillText('HOW TO PLAY', cx, 40);
+
+  // Sections
+  ctx.textAlign = 'left';
+  const lx = 40, rx = W / 2 + 20;
+  let y = 75;
+
+  // Left column — What & Goal
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('WHAT IS THIS?', lx, y);
+  ctx.fillStyle = '#CCC';
+  ctx.font = '11px monospace';
+  ctx.fillText('A platformer about being an international', lx, y += 18);
+  ctx.fillText('student. Run, jump, and make decisions that', lx, y += 14);
+  ctx.fillText('shape your story abroad.', lx, y += 14);
+
+  y += 24;
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('YOUR GOAL', lx, y);
+  ctx.fillStyle = '#CCC';
+  ctx.font = '11px monospace';
+  ctx.fillText('Survive 2 levels (8 zones) while keeping', lx, y += 18);
+  ctx.fillText('3 meters balanced:', lx, y += 14);
+  y += 16;
+  ctx.fillStyle = COL.hudHeart;
+  ctx.fillText('CONNECTION  — relationships, community', lx, y);
+  ctx.fillStyle = '#22AAAA';
+  ctx.fillText('IDENTITY    — cultural confidence', lx, y += 14);
+  ctx.fillStyle = '#44AA44';
+  ctx.fillText('RESOURCES   — finances, visa, academics', lx, y += 14);
+
+  y += 24;
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('ENDINGS', lx, y);
+  ctx.fillStyle = '#CCC';
+  ctx.font = '11px monospace';
+  ctx.fillText('Gate 0: Go back home early (no req)', lx, y += 18);
+  ctx.fillText('Gate 1: Graduate & stay (C\u226540, I\u226540)', lx, y += 14);
+  ctx.fillText('Gate 2: Bridge two worlds (I\u226560)', lx, y += 14);
+
+  // Right column — Controls & The Catch
+  let ry = 75;
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('CONTROLS', rx, ry);
+  ctx.fillStyle = '#CCC';
+  ctx.font = '11px monospace';
+  if (isMobile) {
+    ctx.fillText('On-screen buttons to move & jump', rx, ry += 18);
+    ctx.fillText('Tap A or B for decisions', rx, ry += 14);
+    ctx.fillText('Tap to pause/unpause', rx, ry += 14);
+  } else {
+    ctx.fillText('Arrow keys / Space — move & jump', rx, ry += 18);
+    ctx.fillText('A / B keys — choose in decisions', rx, ry += 14);
+    ctx.fillText('ESC / P — pause    M — mute', rx, ry += 14);
+  }
+
+  ry += 24;
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('GAMEPLAY', rx, ry);
+  ctx.fillStyle = '#CCC';
+  ctx.font = '11px monospace';
+  ctx.fillText('Collect items for +Connection,', rx, ry += 18);
+  ctx.fillText('+Identity, +Resources', rx, ry += 14);
+  ctx.fillText('Avoid enemies (stereotypes, burnout,', rx, ry += 14);
+  ctx.fillText('bureaucracy, isolation...)', rx, ry += 14);
+  ctx.fillText('Face 16 decisions: [A] safe, [B] brave', rx, ry += 14);
+  ctx.fillText('Stay silent and the timer decides', rx, ry += 14);
+
+  ry += 24;
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('THE CATCH', rx, ry);
+  ctx.fillStyle = '#CCC';
+  ctx.font = '11px monospace';
+  ctx.fillText('Safe choices protect your meters but', rx, ry += 18);
+  ctx.fillText('cost Identity. Brave choices are risky', rx, ry += 14);
+  ctx.fillText('but build who you really are.', rx, ry += 14);
+  ctx.fillText('There\'s no right answer — just', rx, ry += 14);
+  ctx.fillText('your story.', rx, ry += 14);
+
+  // Dismiss
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#888';
+  ctx.font = '12px monospace';
+  ctx.fillText(isMobile ? 'Tap anywhere to go back' : 'Press H, ESC, or ENTER to go back', cx, H - 20);
+}
+
 // ============================================================
 // MAIN RENDER
 // ============================================================
 function draw() {
   ctx.clearRect(0, 0, W, H);
+
+  if (state === STATE.HELP) {
+    drawHelp();
+    return;
+  }
 
   if (state === STATE.MENU) {
     drawMenu();
