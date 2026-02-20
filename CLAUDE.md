@@ -33,6 +33,14 @@ Mario-style platformer about the international student experience — identity, 
 
 ## Key Decisions
 - **2026-02-19**: Initial fork from Goers. Full content reskin — 16 decisions rewritten, 10 life events, 7+7 pit challenges, 3 gauntlet timed decisions, 8 end-screen narratives, zone quotes, gate labels, enemy types, background art functions, collectible icons, HUD colors. Engine untouched.
+- **2026-02-20**: ISM contextualization pass. Reviewed Lausanne Global Classroom ISM User Guide through 3 lenses (ISM leader, international student, pastor). Identified 7 gaps and rewrote 5 decisions + 2 life events:
+  - CAMPUS Easy: accent coaching → language-as-identity (ISM: language exhaustion)
+  - CULTURE Hard: "be more local" → cross-cultural dating (ISM: missing relationship dimension)
+  - BELONGING Easy: lead orientation → host family weekly dinners (ISM Ep3: power of hospitality)
+  - HOMESICK Easy: scrolling photos → spiritual/existential seeking (ISM Ep2: faith questions abroad)
+  - ROOTS Easy: company sponsorship → re-entry/reverse culture shock (ISM Ep8: re-entry)
+  - Life event: Thanksgiving invite → campus counseling visit (mental health stigma gap)
+  - Life event: laptop dies → racist encounter on bus (racism beyond stereotypes gap)
 
 ## Gotchas
 - Internal variable names (`heart`, `faith`, `money`, `cross`, etc.) are PRESERVED from Goers to avoid breaking engine logic. Only display text/labels changed.
