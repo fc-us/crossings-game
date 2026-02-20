@@ -928,9 +928,9 @@ function startLevel2() {
   shadowPlayback = [...shadowRecording];
   shadowFrame = 0;
   gauntlet = { active: false, wallX: 0, timedDecisions: [
-    { question: "I belong here — even when I feel invisible.", optA: "I need to earn my place", optB: "My presence is enough", chosen: null, timer: 300 },
-    { question: "My culture is not a costume — it's my strength.", optA: "Blend in to survive", optB: "Stand out to thrive", chosen: null, timer: 300 },
-    { question: "I will build bridges — even when it's easier to retreat.", optA: "Stay with what's familiar", optB: "Reach across the gap", chosen: null, timer: 300 },
+    { question: "I belong here — even when I feel invisible.", optA: "I need to earn my place", optB: "My presence is enough", chosen: null, timer: 480 },
+    { question: "My culture is not a costume — it's my strength.", optA: "Blend in to survive", optB: "Stand out to thrive", chosen: null, timer: 480 },
+    { question: "I will build bridges — even when it's easier to retreat.", optA: "Stay with what's familiar", optB: "Reach across the gap", chosen: null, timer: 480 },
   ], currentTD: -1, tdTimer: 0, complete: false };
 }
 
@@ -1077,7 +1077,7 @@ function spawnParticles(x, y, count, color, opts) {
 }
 
 function addScorePopup(text, x, y, color) {
-  scorePopups.push({ text, x, y, vy: -1.5, life: 45, color: color || '#FFF' });
+  scorePopups.push({ text, x, y, vy: -0.6, life: 120, color: color || '#FFF' });
 }
 
 function copyJourneySummary() {
@@ -1316,14 +1316,14 @@ function update() {
           // After a decision, life really moves on — tighten the boundary
           lifeBoundary = Math.max(lifeBoundary, player.x - 100);
         } else {
-          decisionTimer = 480;
+          decisionTimer = 660;
         }
       }
     } else {
       const q = currentDecision.questions[currentDecision.currentQ];
       decisionTimer--;
       // Decisiveness bonus: answer quickly → negative effects reduced (30%-100% scale)
-      const hesitation = 1 - decisionTimer / 480; // 0 = instant, 1 = last second
+      const hesitation = 1 - decisionTimer / 660; // 0 = instant, 1 = last second
       const penalty = 0.3 + 0.7 * hesitation; // 30% penalty if instant, 100% if slow
       function applyEffect(eff) {
         const h = eff.heart >= 0 ? eff.heart : Math.round(eff.heart * penalty);
@@ -1496,7 +1496,7 @@ function update() {
     screenShake = { frames: 12, intensity: 7 };
     spawnParticles(player.lastSafeX, player.lastSafeY, 16, '#FF4444', { spread: 8, upward: 4, life: 25 });
     addScorePopup(challenge, player.lastSafeX, player.lastSafeY - 30, '#FF6666');
-    addScorePopup('-15\u2764 -12\u271A -10$', player.lastSafeX, player.lastSafeY - 10, '#FF4444');
+    addScorePopup('-15\u2764 -12\u25C6 -10$', player.lastSafeX, player.lastSafeY - 10, '#FF4444');
     pitChallengeMsg = { text: challenge, timer: 150 };
     player.x = player.lastSafeX;
     player.y = player.lastSafeY;
@@ -1633,7 +1633,7 @@ function update() {
       Audio.sfx('block');
       fadeTransition = { alpha: 0.5 };
       state = STATE.DECISION;
-      decisionTimer = 480;
+      decisionTimer = 660;
       decisionEcho = { text: '', timer: 0, choice: '' };
       break;
     }
@@ -1970,32 +1970,155 @@ function drawCloudShape(x, y, w) {
 
 function drawHills() {
   const isL2 = currentLevel === 2;
-  // Hills desaturate when Connection is low, become vibrant when high
   const connPct = (typeof heart !== 'undefined') ? heart / 100 : 0.5;
-  const vibrancy = 0.4 + connPct * 0.6; // 0.4 to 1.0
-  for (const h of hills) {
+  const vibrancy = 0.4 + connPct * 0.6;
+
+  for (let hi = 0; hi < hills.length; hi++) {
+    const h = hills[hi];
     const sx = h.x - camera.x * 0.3;
-    if (sx + h.w < -50 || sx > W + 50) continue;
+    if (sx + h.w < -80 || sx > W + 80) continue;
+
     if (isL2) {
+      // L2: keep moody abstract hills
       const r = Math.round(58 * vibrancy), g = Math.round(40 * vibrancy), b = Math.round(96 * vibrancy);
       ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
-    } else {
-      const r = Math.round(60 * (2 - vibrancy)), g = Math.round(120 + 56 * vibrancy), b = Math.round(40 + 27 * vibrancy);
-      ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
-    }
-    ctx.beginPath();
-    ctx.ellipse(sx + h.w / 2, GROUND_Y, h.w / 2, h.h, 0, Math.PI, 0);
-    ctx.fill();
-    if (isL2) {
+      ctx.beginPath();
+      ctx.ellipse(sx + h.w / 2, GROUND_Y, h.w / 2, h.h, 0, Math.PI, 0);
+      ctx.fill();
       const r2 = Math.round(42 * vibrancy), g2 = Math.round(26 * vibrancy), b2 = Math.round(72 * vibrancy);
       ctx.fillStyle = 'rgb(' + r2 + ',' + g2 + ',' + b2 + ')';
+      ctx.beginPath();
+      ctx.ellipse(sx + h.w / 2 + 5, GROUND_Y, h.w / 2 - 5, h.h - 8, 0, Math.PI, 0);
+      ctx.fill();
     } else {
-      const r2 = Math.round(46 * (2 - vibrancy)), g2 = Math.round(100 + 39 * vibrancy), b2 = Math.round(35 + 20 * vibrancy);
-      ctx.fillStyle = 'rgb(' + r2 + ',' + g2 + ',' + b2 + ')';
+      // L1: campus buildings instead of hills
+      const buildingType = hi % 5;
+      const bh = h.h + 30;
+      const bw = h.w * 0.7;
+      const bx = sx + (h.w - bw) / 2;
+      const by = GROUND_Y - bh;
+      // Wall color responds to Connection
+      const wallR = Math.round(140 + 40 * vibrancy);
+      const wallG = Math.round(120 + 30 * vibrancy);
+      const wallB = Math.round(100 + 20 * vibrancy);
+
+      if (buildingType === 0) {
+        // Dorm / residence hall — tall, narrow, many windows
+        ctx.fillStyle = 'rgb(' + wallR + ',' + wallG + ',' + wallB + ')';
+        ctx.fillRect(bx, by, bw, bh);
+        ctx.fillStyle = 'rgb(' + (wallR - 20) + ',' + (wallG - 20) + ',' + (wallB - 20) + ')';
+        ctx.fillRect(bx, by, bw, 5); // roof edge
+        // Windows grid
+        const cols = Math.max(2, Math.floor(bw / 18));
+        const rows = Math.max(2, Math.floor(bh / 22));
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const lit = ((hi * 7 + r * 3 + c) % 5) > 1;
+            ctx.fillStyle = lit ? 'rgba(255,220,120,0.7)' : 'rgba(80,90,110,0.5)';
+            ctx.fillRect(bx + 6 + c * (bw - 12) / cols, by + 10 + r * (bh - 16) / rows, 8, 10);
+          }
+        }
+        // Door
+        ctx.fillStyle = '#5A3A1A';
+        ctx.fillRect(bx + bw / 2 - 6, GROUND_Y - 18, 12, 18);
+
+      } else if (buildingType === 1) {
+        // Lecture hall — wide, low, with columns
+        const lh = bh * 0.6;
+        ctx.fillStyle = 'rgb(' + wallR + ',' + wallG + ',' + wallB + ')';
+        ctx.fillRect(bx - 10, GROUND_Y - lh, bw + 20, lh);
+        // Triangular pediment
+        ctx.fillStyle = 'rgb(' + (wallR - 15) + ',' + (wallG - 15) + ',' + (wallB - 15) + ')';
+        ctx.beginPath();
+        ctx.moveTo(bx - 12, GROUND_Y - lh);
+        ctx.lineTo(bx + bw / 2 + 10, GROUND_Y - lh - 20);
+        ctx.lineTo(bx + bw + 32, GROUND_Y - lh);
+        ctx.closePath();
+        ctx.fill();
+        // Columns
+        ctx.fillStyle = 'rgb(' + (wallR + 20) + ',' + (wallG + 20) + ',' + (wallB + 20) + ')';
+        for (let c = 0; c < 4; c++) {
+          ctx.fillRect(bx - 4 + c * (bw + 16) / 3, GROUND_Y - lh, 5, lh);
+        }
+        // Windows
+        ctx.fillStyle = 'rgba(100,140,180,0.5)';
+        for (let c = 0; c < 3; c++) {
+          ctx.fillRect(bx + 8 + c * (bw / 3), GROUND_Y - lh + 10, bw / 4, lh * 0.4);
+        }
+
+      } else if (buildingType === 2) {
+        // Clock tower — thin, tall, with clock face
+        const tw = bw * 0.4;
+        const tx = bx + (bw - tw) / 2;
+        const th = bh + 25;
+        ctx.fillStyle = 'rgb(' + (wallR - 10) + ',' + (wallG - 10) + ',' + wallB + ')';
+        ctx.fillRect(tx, GROUND_Y - th, tw, th);
+        // Pointed top
+        ctx.beginPath();
+        ctx.moveTo(tx - 2, GROUND_Y - th);
+        ctx.lineTo(tx + tw / 2, GROUND_Y - th - 18);
+        ctx.lineTo(tx + tw + 2, GROUND_Y - th);
+        ctx.closePath();
+        ctx.fill();
+        // Clock face
+        ctx.fillStyle = '#FFFFEE';
+        ctx.beginPath();
+        ctx.arc(tx + tw / 2, GROUND_Y - th + 16, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(tx + tw / 2, GROUND_Y - th + 16, 8, 0, Math.PI * 2);
+        ctx.stroke();
+        // Clock hands
+        ctx.beginPath();
+        ctx.moveTo(tx + tw / 2, GROUND_Y - th + 16);
+        ctx.lineTo(tx + tw / 2 + 4, GROUND_Y - th + 12);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(tx + tw / 2, GROUND_Y - th + 16);
+        ctx.lineTo(tx + tw / 2, GROUND_Y - th + 10);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+
+      } else if (buildingType === 3) {
+        // Library — wide with arched windows
+        const lh2 = bh * 0.7;
+        ctx.fillStyle = 'rgb(' + (wallR + 10) + ',' + (wallG + 5) + ',' + wallB + ')';
+        ctx.fillRect(bx, GROUND_Y - lh2, bw, lh2);
+        ctx.fillStyle = 'rgb(' + (wallR - 10) + ',' + (wallG - 10) + ',' + (wallB - 5) + ')';
+        ctx.fillRect(bx, GROUND_Y - lh2, bw, 6);
+        // Arched windows
+        for (let c = 0; c < 3; c++) {
+          const wx = bx + 8 + c * (bw - 10) / 3;
+          ctx.fillStyle = 'rgba(100,140,180,0.5)';
+          ctx.fillRect(wx, GROUND_Y - lh2 + 18, 12, 20);
+          ctx.beginPath();
+          ctx.arc(wx + 6, GROUND_Y - lh2 + 18, 6, Math.PI, 0);
+          ctx.fill();
+        }
+        // "LIBRARY" text
+        ctx.fillStyle = 'rgba(60,50,40,0.6)';
+        ctx.font = '5px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('LIBRARY', bx + bw / 2, GROUND_Y - lh2 + 12);
+        ctx.textAlign = 'left';
+
+      } else {
+        // Campus tree — break up the buildings
+        ctx.fillStyle = 'rgb(' + Math.round(60 + 47 * vibrancy) + ',' + Math.round(40 + 26 * vibrancy) + ',30)';
+        ctx.fillRect(sx + h.w / 2 - 4, GROUND_Y - 50, 8, 50);
+        const leafG = Math.round(120 + 56 * vibrancy);
+        ctx.fillStyle = 'rgb(40,' + leafG + ',40)';
+        ctx.beginPath();
+        ctx.arc(sx + h.w / 2, GROUND_Y - 55, 22, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgb(30,' + Math.round(leafG - 20) + ',35)';
+        ctx.beginPath();
+        ctx.arc(sx + h.w / 2 + 8, GROUND_Y - 62, 16, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
-    ctx.beginPath();
-    ctx.ellipse(sx + h.w / 2 + 5, GROUND_Y, h.w / 2 - 5, h.h - 8, 0, Math.PI, 0);
-    ctx.fill();
   }
 }
 
@@ -2776,7 +2899,7 @@ function drawEnemies() {
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.font = '8px monospace';
     ctx.textAlign = 'center';
-    const labels = { stereotype:'STEREO', bureaucracy:'BUREAU', burnout:'BURNOUT', isolation:'ISOLATE',
+    const labels = { stereotype:'STEREOTYPE', bureaucracy:'BUREAUCRACY', burnout:'BURNOUT', isolation:'ISOLATION',
       imposter:'IMPOSTER', visa:'VISA', homesick:'HOMESICK', assimilate:'ASSIMILATE' };
     ctx.fillText(labels[e.type] || e.type.toUpperCase(), sx, e.y + eh / 2 + 10);
   }
@@ -2828,6 +2951,13 @@ function drawPlayer() {
   ctx.fillStyle = shirt;
   ctx.fillRect(3, 10, 14, 8);
 
+  // Backpack (student!) — on the back side
+  const bpSide = f === 1 ? -2 : 16;
+  ctx.fillStyle = '#CC6622';
+  ctx.fillRect(bpSide, 10, 4, 9);
+  ctx.fillStyle = '#AA5511';
+  ctx.fillRect(bpSide, 14, 4, 2); // strap detail
+
   // Arms
   ctx.fillStyle = skin;
   const armSwing = player.grounded ? Math.sin(player.walkFrame * 0.8) * 3 : -2;
@@ -2870,11 +3000,15 @@ function drawParticles() {
 function drawScorePopups() {
   const cx = camera.x;
   for (const sp of scorePopups) {
-    const alpha = sp.life / 45;
+    const alpha = Math.min(1, sp.life / 30);
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = sp.color;
-    ctx.font = 'bold 12px monospace';
+    // Dark background for readability
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    const tw = ctx.measureText ? sp.text.length * 8 : 120;
+    ctx.font = 'bold 13px monospace';
     ctx.textAlign = 'center';
+    ctx.fillRect(sp.x - cx - tw / 2 - 4, sp.y - 13, tw + 8, 18);
+    ctx.fillStyle = sp.color;
     ctx.fillText(sp.text, sp.x - cx, sp.y);
   }
   ctx.globalAlpha = 1;
@@ -3154,22 +3288,22 @@ function drawHUD() {
   ctx.fillRect(0, 0, W, 56);
 
   // Heart label + icons
-  drawPixelText('CONN', 10, 5, 9, '#FF8844');
+  drawPixelText('CONNECTION', 10, 5, 7, '#FF8844');
   const heartCount = Math.ceil(heart / 10);
   for (let i = 0; i < 10; i++) {
-    drawHeartIcon(58 + i * 16, 4, 12, i < heartCount);
+    drawHeartIcon(80 + i * 16, 4, 12, i < heartCount);
   }
 
   // Faith label + icons
-  drawPixelText('IDENT', 10, 19, 9, '#22AAAA');
+  drawPixelText('IDENTITY', 10, 19, 7, '#22AAAA');
   for (let i = 0; i < 10; i++) {
-    drawIdentityIcon(58 + i * 16, 18, 12, i < Math.ceil(faith / 10));
+    drawIdentityIcon(80 + i * 16, 18, 12, i < Math.ceil(faith / 10));
   }
 
   // Money label + icons
-  drawPixelText('RSRC', 10, 33, 9, '#44AA44');
+  drawPixelText('RESOURCES', 10, 33, 7, '#44AA44');
   for (let i = 0; i < 10; i++) {
-    drawCoinIcon(58 + i * 16, 32, 12, i < Math.ceil(money / 10));
+    drawCoinIcon(80 + i * 16, 32, 12, i < Math.ceil(money / 10));
   }
 
   // Zone name + level
@@ -3223,8 +3357,8 @@ function drawDecisionPopup() {
   ctx.fillStyle = 'rgba(0,0,0,0.75)';
   ctx.fillRect(0, 0, W, H);
 
-  // Popup box
-  const pw = 700, ph = 300;
+  // Popup box — clamp to canvas width
+  const pw = Math.min(700, W - 20), ph = 300;
   const px = (W - pw) / 2, py = (H - ph) / 2;
 
   ctx.fillStyle = '#1A1A3A';
@@ -3235,7 +3369,7 @@ function drawDecisionPopup() {
 
   // Timer bar — prominent at top with countdown
   if (decisionEcho.timer <= 0 && decisionTimer > 0) {
-    const timerPct = decisionTimer / 480;
+    const timerPct = decisionTimer / 660;
     const barColor = timerPct < 0.25 ? '#FF4444' : timerPct < 0.5 ? '#FFAA22' : '#44AA44';
     ctx.fillStyle = '#222';
     ctx.fillRect(px + 10, py + 6, pw - 70, 10);
@@ -3288,26 +3422,43 @@ function drawDecisionPopup() {
   }
   const optY = py + 58 + lines.length * 20 + 15;
 
-  // Option buttons — auto-size font to fit
-  const btnW = pw / 2 - 40;
+  // Option buttons — word wrap to fit
+  const btnW = pw / 2 - 40, btnH = 60;
   const btnAx = px + 20, btnBx = px + pw / 2 + 20;
   const textA = '[A] ' + q.optionA, textB = '[B] ' + q.optionB;
-  const optFont = Math.max(textA.length, textB.length) > 28 ? 'bold 12px monospace' : 'bold 14px monospace';
+  const maxChars = Math.floor(btnW / 8); // ~chars that fit per line at 12px
+
+  function wrapBtn(text, maxC) {
+    const ws = text.split(' ');
+    const ls = []; let l = '';
+    for (const w of ws) {
+      if ((l + ' ' + w).length > maxC) { ls.push(l); l = w; }
+      else { l = l ? l + ' ' + w : w; }
+    }
+    if (l) ls.push(l);
+    return ls;
+  }
+  const linesA = wrapBtn(textA, maxChars);
+  const linesB = wrapBtn(textB, maxChars);
+  const maxLines = Math.max(linesA.length, linesB.length);
+  const dynBtnH = Math.max(btnH, 20 + maxLines * 16);
 
   // Option A
   ctx.fillStyle = '#FF6644';
-  ctx.fillRect(btnAx, optY, btnW, 50);
+  ctx.fillRect(btnAx, optY, btnW, dynBtnH);
   ctx.fillStyle = '#FFF';
-  ctx.font = optFont;
+  ctx.font = 'bold 12px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(textA, btnAx + btnW / 2, optY + 28);
+  const aStartY = optY + (dynBtnH - linesA.length * 16) / 2 + 12;
+  for (let i = 0; i < linesA.length; i++) ctx.fillText(linesA[i], btnAx + btnW / 2, aStartY + i * 16);
 
   // Option B
   ctx.fillStyle = '#4488FF';
-  ctx.fillRect(btnBx, optY, btnW, 50);
+  ctx.fillRect(btnBx, optY, btnW, dynBtnH);
   ctx.fillStyle = '#FFF';
-  ctx.font = optFont;
-  ctx.fillText(textB, btnBx + btnW / 2, optY + 28);
+  ctx.font = 'bold 12px monospace';
+  const bStartY = optY + (dynBtnH - linesB.length * 16) / 2 + 12;
+  for (let i = 0; i < linesB.length; i++) ctx.fillText(linesB[i], btnBx + btnW / 2, bStartY + i * 16);
 
   // Verse at bottom
   ctx.fillStyle = '#BBA855';
@@ -3364,23 +3515,24 @@ function drawEcho() {
     ctx.fillText('You said nothing. Life moved on.', W / 2, H / 2 + lines.length * 22 + 25);
   }
 
-  // Meter delta overlay
-  if (meterDelta.timer > 0) {
-    const dAlpha = Math.min(1, meterDelta.timer / 30) * alpha;
-    ctx.font = 'bold 16px monospace';
+  // Meter delta overlay — stays visible for entire echo screen, stacked vertically
+  if (meterDelta.heart !== 0 || meterDelta.faith !== 0 || meterDelta.money !== 0) {
+    ctx.font = 'bold 15px monospace';
     ctx.textAlign = 'center';
-    const deltaY = H / 2 + lines.length * 22 + 50;
+    let deltaY = H / 2 + lines.length * 22 + 55;
     if (meterDelta.heart !== 0) {
-      ctx.fillStyle = meterDelta.heart > 0 ? 'rgba(255,100,120,' + dAlpha + ')' : 'rgba(180,60,80,' + dAlpha + ')';
-      ctx.fillText((meterDelta.heart > 0 ? '+' : '') + meterDelta.heart + ' Connection', W / 2 - 120, deltaY);
+      ctx.fillStyle = meterDelta.heart > 0 ? 'rgba(255,136,68,' + alpha + ')' : 'rgba(220,80,60,' + alpha + ')';
+      ctx.fillText((meterDelta.heart > 0 ? '+' : '') + meterDelta.heart + ' Connection', W / 2, deltaY);
+      deltaY += 22;
     }
     if (meterDelta.faith !== 0) {
-      ctx.fillStyle = meterDelta.faith > 0 ? 'rgba(100,150,255,' + dAlpha + ')' : 'rgba(60,80,180,' + dAlpha + ')';
+      ctx.fillStyle = meterDelta.faith > 0 ? 'rgba(34,170,170,' + alpha + ')' : 'rgba(60,120,180,' + alpha + ')';
       ctx.fillText((meterDelta.faith > 0 ? '+' : '') + meterDelta.faith + ' Identity', W / 2, deltaY);
+      deltaY += 22;
     }
     if (meterDelta.money !== 0) {
-      ctx.fillStyle = meterDelta.money > 0 ? 'rgba(68,170,68,' + dAlpha + ')' : 'rgba(40,100,40,' + dAlpha + ')';
-      ctx.fillText((meterDelta.money > 0 ? '+' : '') + meterDelta.money + ' Resources', W / 2 + 120, deltaY);
+      ctx.fillStyle = meterDelta.money > 0 ? 'rgba(68,170,68,' + alpha + ')' : 'rgba(60,130,60,' + alpha + ')';
+      ctx.fillText((meterDelta.money > 0 ? '+' : '') + meterDelta.money + ' Resources', W / 2, deltaY);
     }
   }
 
@@ -3522,10 +3674,47 @@ function drawMenu() {
     drawCloudShape(cx, cy, 60 + i * 10);
   }
 
+  // Campus buildings in background
+  // Library (left)
+  ctx.fillStyle = '#9B8A7A';
+  ctx.fillRect(30, H - 170, 100, 106);
+  ctx.fillStyle = '#8A7A6A';
+  ctx.beginPath(); ctx.moveTo(25, H - 170); ctx.lineTo(80, H - 200); ctx.lineTo(135, H - 170); ctx.closePath(); ctx.fill();
+  for (let c = 0; c < 3; c++) { ctx.fillStyle = '#B0A090'; ctx.fillRect(40 + c * 30, H - 168, 6, 104); }
+  ctx.fillStyle = 'rgba(100,140,180,0.5)';
+  for (let c = 0; c < 2; c++) ctx.fillRect(50 + c * 30, H - 150, 20, 30);
+  ctx.fillStyle = '#5A3A1A'; ctx.fillRect(68, H - 82, 14, 18);
+  // Clock tower (center-right)
+  ctx.fillStyle = '#A09080';
+  ctx.fillRect(W - 160, H - 210, 40, 146);
+  ctx.fillStyle = '#908070';
+  ctx.beginPath(); ctx.moveTo(W - 162, H - 210); ctx.lineTo(W - 140, H - 240); ctx.lineTo(W - 118, H - 210); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#FFFFEE'; ctx.beginPath(); ctx.arc(W - 140, H - 195, 10, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(W - 140, H - 195); ctx.lineTo(W - 135, H - 200); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(W - 140, H - 195); ctx.lineTo(W - 140, H - 203); ctx.stroke();
+  ctx.lineWidth = 1;
+  // Dorm (far right)
+  ctx.fillStyle = '#8A7B6B';
+  ctx.fillRect(W - 100, H - 150, 70, 86);
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+    ctx.fillStyle = ((r + c) % 3 === 0) ? 'rgba(255,220,120,0.7)' : 'rgba(80,90,110,0.5)';
+    ctx.fillRect(W - 92 + c * 20, H - 140 + r * 25, 10, 14);
+  }
+  // Trees between buildings
+  const treeXs = [150, 200, W - 200, W - 110];
+  for (const tx of treeXs) {
+    ctx.fillStyle = '#6B4226'; ctx.fillRect(tx - 3, H - 100, 6, 36);
+    ctx.fillStyle = '#3CB043'; ctx.beginPath(); ctx.arc(tx, H - 105, 16, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#2E8B37'; ctx.beginPath(); ctx.arc(tx + 5, H - 112, 12, 0, Math.PI * 2); ctx.fill();
+  }
+  // Campus path
+  ctx.fillStyle = '#C0B8A0';
+  ctx.fillRect(0, H - 64, W, 4);
   // Ground
-  drawBrickBlock(0, H - 64, W, 64);
+  drawBrickBlock(0, H - 60, W, 60);
   ctx.fillStyle = '#55BB33';
-  ctx.fillRect(0, H - 64, W, 3);
+  ctx.fillRect(0, H - 64, W, 4);
 
   // Title
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
@@ -3615,7 +3804,9 @@ function drawMenu() {
   ctx.shadowBlur = 6;
   ctx.fillStyle = '#BBCCDD';
   ctx.font = '11px monospace';
-  ctx.fillText('A Frontier Commons experience', W / 2, H - 78);
+  ctx.textAlign = 'right';
+  ctx.fillText('A Frontier Commons experience', W - 15, 20);
+  ctx.textAlign = 'center';
   ctx.restore();
 
   // Small character standing on ground (uses selected skin + gender)
@@ -3704,7 +3895,7 @@ function drawLevelComplete() {
   if (levelCompleteTimer > 60 && Math.floor(frameCount / 30) % 2 === 0) {
     ctx.fillStyle = '#FFF';
     ctx.font = 'bold 18px monospace';
-    ctx.fillText('Press ENTER for Level 2', W / 2, 270 + qLines.length * 18 + 70);
+    ctx.fillText('Press ENTER for Level 2', W / 2, 270 + qLines.length * 18 + 95);
   }
 }
 
@@ -3878,7 +4069,9 @@ function drawEndScreen() {
   // Attribution
   ctx.fillStyle = '#556677';
   ctx.font = '10px monospace';
-  ctx.fillText('A Frontier Commons experience', W / 2, H - 55);
+  ctx.textAlign = 'right';
+  ctx.fillText('A Frontier Commons experience', W - 15, H - 55);
+  ctx.textAlign = 'center';
 
   // Restart / Reflect
   if (restartConfirm) {
