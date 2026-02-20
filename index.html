@@ -967,6 +967,7 @@ let state, player, camera, level, heart, faith, money, trophyCount, decisions, c
 // --- New systems ---
 let particles = [];
 let scorePopups = [];
+let moodParticles = [];
 let screenShake = { frames: 0, intensity: 0 };
 let coyoteTimer = 0, jumpBuffer = 0;
 let zoneQuote = { text: '', timer: 0 };
@@ -1139,6 +1140,7 @@ function startGame() {
   levelCompleteTimer = 0;
   particles = [];
   scorePopups = [];
+  moodParticles = [];
   screenShake = { frames: 0, intensity: 0 };
   coyoteTimer = 0;
   jumpBuffer = 0;
@@ -1766,6 +1768,9 @@ function update() {
     if (p.life <= 0) particles.splice(i, 1);
   }
 
+  // Update mood particles
+  updateMoodParticles();
+
   // Update score popups (A3)
   for (let i = scorePopups.length - 1; i >= 0; i--) {
     const sp = scorePopups[i];
@@ -1824,34 +1829,128 @@ function drawSky() {
   ctx.fillRect(0, 0, W, H);
 }
 
-// Sky responds to faith — subtle mood overlay
+// Sky responds to all three meters — mood overlay
 function drawSkyMood() {
   if (typeof faith === 'undefined') return;
-  const faithPct = faith / 100;
-  if (faithPct > 0.6) {
-    // Warm golden glow — faith is strong
-    const warmth = (faithPct - 0.6) / 0.4;
-    ctx.fillStyle = 'rgba(255,200,80,' + (warmth * 0.1) + ')';
+  const connPct = heart / 100;
+  const idPct = faith / 100;
+  const resPct = money / 100;
+
+  // Identity: warm golden glow when high, cool gray when low
+  if (idPct > 0.6) {
+    const warmth = (idPct - 0.6) / 0.4;
+    ctx.fillStyle = 'rgba(255,200,80,' + (warmth * 0.12) + ')';
     ctx.fillRect(0, 0, W, H * 0.6);
-  } else if (faithPct < 0.35) {
-    // Cool gray wash — faith is wavering
-    const cold = (0.35 - faithPct) / 0.35;
-    ctx.fillStyle = 'rgba(80,80,110,' + (cold * 0.12) + ')';
+  } else if (idPct < 0.35) {
+    const cold = (0.35 - idPct) / 0.35;
+    ctx.fillStyle = 'rgba(80,80,110,' + (cold * 0.15) + ')';
     ctx.fillRect(0, 0, W, H);
+  }
+
+  // Connection: warm pink tint when high, cold blue isolation when low
+  if (connPct > 0.65) {
+    const w = (connPct - 0.65) / 0.35;
+    ctx.fillStyle = 'rgba(255,150,120,' + (w * 0.08) + ')';
+    ctx.fillRect(0, H * 0.3, W, H * 0.7);
+  } else if (connPct < 0.3) {
+    const c = (0.3 - connPct) / 0.3;
+    ctx.fillStyle = 'rgba(40,40,80,' + (c * 0.12) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Resources: subtle red stress vignette when very low
+  if (resPct < 0.2) {
+    const stress = (0.2 - resPct) / 0.2;
+    const grad = ctx.createRadialGradient(W / 2, H / 2, W * 0.3, W / 2, H / 2, W * 0.8);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(120,30,30,' + (stress * 0.15) + ')');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+// Ambient mood particles — rain when isolated, golden motes when thriving
+function updateMoodParticles() {
+  if (typeof heart === 'undefined' || state !== STATE.PLAYING) return;
+  const connPct = heart / 100;
+  const idPct = faith / 100;
+
+  // Rain when Connection < 30
+  if (connPct < 0.3 && frameCount % 3 === 0) {
+    const intensity = Math.ceil((0.3 - connPct) / 0.1);
+    for (let i = 0; i < intensity; i++) {
+      moodParticles.push({
+        x: Math.random() * W, y: -5,
+        vx: -0.5, vy: 3 + Math.random() * 2,
+        life: 80 + Math.random() * 40,
+        type: 'rain'
+      });
+    }
+  }
+
+  // Golden motes when Identity > 70
+  if (idPct > 0.7 && frameCount % 8 === 0) {
+    moodParticles.push({
+      x: Math.random() * W, y: H * 0.3 + Math.random() * H * 0.5,
+      vx: (Math.random() - 0.5) * 0.3, vy: -0.3 - Math.random() * 0.3,
+      life: 80 + Math.random() * 40,
+      type: 'glow'
+    });
+  }
+
+  // Update existing
+  for (let i = moodParticles.length - 1; i >= 0; i--) {
+    const p = moodParticles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+    if (p.life <= 0 || p.y > H + 10 || p.y < -20) moodParticles.splice(i, 1);
+  }
+  // Cap at 120 particles
+  if (moodParticles.length > 120) moodParticles.splice(0, moodParticles.length - 120);
+}
+
+function drawMoodParticles() {
+  for (const p of moodParticles) {
+    const alpha = Math.min(1, p.life / 30);
+    if (p.type === 'rain') {
+      ctx.strokeStyle = 'rgba(140,160,200,' + (alpha * 0.4) + ')';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + p.vx * 3, p.y + p.vy * 3);
+      ctx.stroke();
+    } else if (p.type === 'glow') {
+      ctx.fillStyle = 'rgba(255,220,100,' + (alpha * 0.35) + ')';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2 + Math.sin(p.life * 0.1) * 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }
 
 function drawClouds() {
   const isL2 = currentLevel === 2;
+  // Clouds darken when Identity is low, brighten when high
+  const idPct = (typeof faith !== 'undefined') ? faith / 100 : 0.5;
+  const brightness = 0.5 + idPct * 0.5; // 0.5 to 1.0
   for (const c of clouds) {
     const parallax = c.layer === 0 ? 0.2 : 0.4;
-    const speedMult = isL2 ? 0.5 : 1; // slower clouds in L2
+    const speedMult = isL2 ? 0.5 : 1;
     const sx = c.x - camera.x * parallax * speedMult;
     const wx = ((sx % (W + c.w * 2)) + W + c.w * 2) % (W + c.w * 2) - c.w;
 
-    ctx.fillStyle = isL2 ? '#555566' : COL.cloudShadow;
-    drawCloudShape(wx + 2, c.y + 2, c.w);
-    ctx.fillStyle = isL2 ? '#777788' : COL.cloud;
+    if (isL2) {
+      const sv = Math.round(85 * brightness), sv2 = Math.round(102 * brightness);
+      ctx.fillStyle = 'rgb(' + sv + ',' + sv + ',' + Math.round(sv * 1.2) + ')';
+      drawCloudShape(wx + 2, c.y + 2, c.w);
+      ctx.fillStyle = 'rgb(' + sv2 + ',' + sv2 + ',' + Math.round(sv2 * 1.15) + ')';
+    } else {
+      const sh = Math.round(180 * brightness), cl = Math.round(230 * brightness);
+      ctx.fillStyle = 'rgb(' + sh + ',' + sh + ',' + Math.round(sh * 1.1) + ')';
+      drawCloudShape(wx + 2, c.y + 2, c.w);
+      ctx.fillStyle = 'rgb(' + cl + ',' + cl + ',' + Math.round(Math.min(255, cl * 1.05)) + ')';
+    }
     drawCloudShape(wx, c.y, c.w);
   }
 }
@@ -1871,14 +1970,29 @@ function drawCloudShape(x, y, w) {
 
 function drawHills() {
   const isL2 = currentLevel === 2;
+  // Hills desaturate when Connection is low, become vibrant when high
+  const connPct = (typeof heart !== 'undefined') ? heart / 100 : 0.5;
+  const vibrancy = 0.4 + connPct * 0.6; // 0.4 to 1.0
   for (const h of hills) {
     const sx = h.x - camera.x * 0.3;
     if (sx + h.w < -50 || sx > W + 50) continue;
-    ctx.fillStyle = isL2 ? '#3A2860' : '#3CB043';
+    if (isL2) {
+      const r = Math.round(58 * vibrancy), g = Math.round(40 * vibrancy), b = Math.round(96 * vibrancy);
+      ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+    } else {
+      const r = Math.round(60 * (2 - vibrancy)), g = Math.round(120 + 56 * vibrancy), b = Math.round(40 + 27 * vibrancy);
+      ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+    }
     ctx.beginPath();
     ctx.ellipse(sx + h.w / 2, GROUND_Y, h.w / 2, h.h, 0, Math.PI, 0);
     ctx.fill();
-    ctx.fillStyle = isL2 ? '#2A1A48' : '#2E8B37';
+    if (isL2) {
+      const r2 = Math.round(42 * vibrancy), g2 = Math.round(26 * vibrancy), b2 = Math.round(72 * vibrancy);
+      ctx.fillStyle = 'rgb(' + r2 + ',' + g2 + ',' + b2 + ')';
+    } else {
+      const r2 = Math.round(46 * (2 - vibrancy)), g2 = Math.round(100 + 39 * vibrancy), b2 = Math.round(35 + 20 * vibrancy);
+      ctx.fillStyle = 'rgb(' + r2 + ',' + g2 + ',' + b2 + ')';
+    }
     ctx.beginPath();
     ctx.ellipse(sx + h.w / 2 + 5, GROUND_Y, h.w / 2 - 5, h.h - 8, 0, Math.PI, 0);
     ctx.fill();
@@ -3857,6 +3971,7 @@ function draw() {
     // Draw game world frozen underneath
     drawSky();
     drawSkyMood();
+    drawMoodParticles();
     drawClouds();
     drawHills();
     drawBackgrounds();
@@ -3901,6 +4016,7 @@ function draw() {
   // Playing or Decision
   drawSky();
   drawSkyMood();
+  drawMoodParticles();
   drawClouds();
   drawHills();
   drawBackgrounds();
