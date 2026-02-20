@@ -457,6 +457,10 @@ canvasEl.addEventListener('click', e => {
       clickedOption = 'B';
     }
   } else if (state === STATE.MENU) {
+    // Help button (bottom-right)
+    if (x >= W - 60 && x <= W - 10 && y >= H - 50 && y <= H - 22) {
+      state = STATE.HELP; return;
+    }
     // On mobile, tapping near the gender arrows toggles gender instead of starting
     if (isMobile && y >= 330 && y <= 366 && x >= W / 2 - 60 && x <= W / 2 - 24) {
       characterGender = characterGender === 0 ? 1 : 0;
@@ -1132,7 +1136,7 @@ function copyJournalPrompts() {
 }
 
 function initGame() {
-  state = STATE.MENU;
+  state = STATE.HELP;
   frameCount = 0;
   currentLevel = 1;
   Audio.playTrack('menu');
@@ -1838,10 +1842,11 @@ function drawSky() {
     else if (z === 2) { topColor = '#2A3A8F'; bottomColor = '#6A78BF'; }
     else { topColor = '#FF6633'; bottomColor = '#FFCC66'; }
   } else {
-    if (z === 0) { topColor = '#5566AA'; bottomColor = '#8899CC'; }
-    else if (z === 1) { topColor = '#445566'; bottomColor = '#778899'; }
-    else if (z === 2) { topColor = '#667744'; bottomColor = '#99AA77'; }
-    else { topColor = '#CC6644'; bottomColor = '#FFDD88'; }
+    // L2: evening/dusk city — warmer, not dungeon-dark
+    if (z === 0) { topColor = '#2A3A6A'; bottomColor = '#6B7AAA'; }      // HOMESICK — blue evening
+    else if (z === 1) { topColor = '#3A3A5A'; bottomColor = '#7A7A99'; } // PRESSURE — overcast dusk
+    else if (z === 2) { topColor = '#3A5A5A'; bottomColor = '#7AAAAA'; } // BRIDGE — teal twilight
+    else { topColor = '#8B4A2A'; bottomColor = '#FFBB66'; }              // ROOTS — warm sunset
   }
 
   const grad = ctx.createLinearGradient(0, 0, 0, H);
@@ -2001,17 +2006,68 @@ function drawHills() {
     if (sx + h.w < -80 || sx > W + 80) continue;
 
     if (isL2) {
-      // L2: keep moody abstract hills
-      const r = Math.round(58 * vibrancy), g = Math.round(40 * vibrancy), b = Math.round(96 * vibrancy);
-      ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
-      ctx.beginPath();
-      ctx.ellipse(sx + h.w / 2, GROUND_Y, h.w / 2, h.h, 0, Math.PI, 0);
-      ctx.fill();
-      const r2 = Math.round(42 * vibrancy), g2 = Math.round(26 * vibrancy), b2 = Math.round(72 * vibrancy);
-      ctx.fillStyle = 'rgb(' + r2 + ',' + g2 + ',' + b2 + ')';
-      ctx.beginPath();
-      ctx.ellipse(sx + h.w / 2 + 5, GROUND_Y, h.w / 2 - 5, h.h - 8, 0, Math.PI, 0);
-      ctx.fill();
+      // L2: city skyline buildings — evening cityscape
+      const bType = hi % 6;
+      const bh = h.h + 40;
+      const bw = h.w * 0.65;
+      const bx = sx + (h.w - bw) / 2;
+      const by = GROUND_Y - bh;
+      // Building colors: muted blues/grays with Connection vibrancy
+      const wr = Math.round(60 + 30 * vibrancy), wg = Math.round(65 + 25 * vibrancy), wb = Math.round(80 + 20 * vibrancy);
+
+      if (bType === 0) {
+        // Apartment tower
+        ctx.fillStyle = 'rgb(' + wr + ',' + wg + ',' + wb + ')';
+        ctx.fillRect(bx, by, bw, bh);
+        ctx.fillStyle = 'rgb(' + (wr - 10) + ',' + (wg - 10) + ',' + (wb - 10) + ')';
+        ctx.fillRect(bx, by, bw, 4);
+        for (let r = 0; r < Math.floor(bh / 18); r++) for (let c = 0; c < Math.floor(bw / 14); c++) {
+          ctx.fillStyle = ((hi * 5 + r * 3 + c) % 4) > 1 ? 'rgba(255,220,120,0.6)' : 'rgba(40,50,70,0.5)';
+          ctx.fillRect(bx + 4 + c * (bw - 8) / Math.floor(bw / 14), by + 8 + r * 18, 7, 10);
+        }
+      } else if (bType === 1) {
+        // Office building with antenna
+        ctx.fillStyle = 'rgb(' + (wr + 10) + ',' + (wg + 10) + ',' + (wb + 15) + ')';
+        ctx.fillRect(bx + 5, by, bw - 10, bh);
+        ctx.fillStyle = 'rgba(100,150,200,0.4)';
+        for (let r = 0; r < Math.floor(bh / 20); r++) ctx.fillRect(bx + 8, by + 6 + r * 20, bw - 16, 12);
+        ctx.fillStyle = '#555'; ctx.fillRect(bx + bw / 2 - 1, by - 20, 2, 20);
+        ctx.fillStyle = '#F44'; ctx.fillRect(bx + bw / 2 - 2, by - 22, 4, 4);
+      } else if (bType === 2) {
+        // Cafe / shop — low, warm
+        const sh = bh * 0.45;
+        ctx.fillStyle = 'rgb(' + (wr + 20) + ',' + (wg + 10) + ',' + (wb - 10) + ')';
+        ctx.fillRect(bx, GROUND_Y - sh, bw, sh);
+        ctx.fillStyle = 'rgba(255,200,100,0.5)'; ctx.fillRect(bx + 4, GROUND_Y - sh + 5, bw - 8, sh * 0.5);
+        ctx.fillStyle = '#A06030'; ctx.fillRect(bx + bw / 2 - 5, GROUND_Y - 14, 10, 14);
+        // Awning
+        ctx.fillStyle = 'rgba(200,80,60,0.7)';
+        ctx.fillRect(bx - 3, GROUND_Y - sh - 4, bw + 6, 6);
+      } else if (bType === 3) {
+        // Tall narrow building
+        const tw = bw * 0.6;
+        const tx = bx + (bw - tw) / 2;
+        ctx.fillStyle = 'rgb(' + wr + ',' + (wg + 5) + ',' + (wb + 10) + ')';
+        ctx.fillRect(tx, by - 20, tw, bh + 20);
+        for (let r = 0; r < Math.floor((bh + 20) / 16); r++) {
+          ctx.fillStyle = ((hi * 3 + r) % 3) > 0 ? 'rgba(255,220,120,0.5)' : 'rgba(40,50,70,0.4)';
+          ctx.fillRect(tx + 4, by - 16 + r * 16, tw - 8, 9);
+        }
+      } else if (bType === 4) {
+        // Street lamp
+        ctx.fillStyle = '#555'; ctx.fillRect(sx + h.w / 2 - 2, GROUND_Y - 60, 4, 60);
+        ctx.fillStyle = '#777'; ctx.fillRect(sx + h.w / 2 - 8, GROUND_Y - 62, 16, 4);
+        ctx.fillStyle = 'rgba(255,220,140,0.4)';
+        ctx.beginPath(); ctx.arc(sx + h.w / 2, GROUND_Y - 65, 20, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#FFE080'; ctx.fillRect(sx + h.w / 2 - 3, GROUND_Y - 66, 6, 6);
+      } else {
+        // Tree / park element
+        ctx.fillStyle = '#4A3520'; ctx.fillRect(sx + h.w / 2 - 3, GROUND_Y - 50, 6, 50);
+        ctx.fillStyle = 'rgb(' + Math.round(40 + 50 * vibrancy) + ',' + Math.round(80 + 60 * vibrancy) + ',' + Math.round(40 + 30 * vibrancy) + ')';
+        ctx.beginPath(); ctx.arc(sx + h.w / 2, GROUND_Y - 55, 20, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgb(' + Math.round(30 + 40 * vibrancy) + ',' + Math.round(60 + 50 * vibrancy) + ',' + Math.round(30 + 20 * vibrancy) + ')';
+        ctx.beginPath(); ctx.arc(sx + h.w / 2 + 8, GROUND_Y - 62, 14, 0, Math.PI * 2); ctx.fill();
+      }
     } else {
       // L1: campus buildings instead of hills
       const buildingType = hi % 5;
@@ -3111,9 +3167,9 @@ function drawFog() {
 
   const grad = ctx.createRadialGradient(px, py, radius * 0.3, px, py, radius);
   grad.addColorStop(0, 'rgba(0,0,0,0)');
-  grad.addColorStop(0.5, 'rgba(0,0,0,0.2)');
-  grad.addColorStop(0.8, 'rgba(0,0,0,0.6)');
-  grad.addColorStop(1, 'rgba(0,0,0,0.95)');
+  grad.addColorStop(0.5, 'rgba(0,0,0,0.1)');
+  grad.addColorStop(0.8, 'rgba(0,0,0,0.35)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.7)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
 }
@@ -3122,7 +3178,7 @@ function drawFog() {
 function drawVignette() {
   if (currentLevel !== 2) return;
   const bCount = decisions.filter(d => d.choice === 'B').length;
-  const intensity = 0.5 - bCount * 0.04; // more B answers = less darkness
+  const intensity = 0.3 - bCount * 0.03; // more B answers = less darkness
   // Dark corners
   const grad = ctx.createRadialGradient(W / 2, H / 2, W * 0.3, W / 2, H / 2, W * 0.7);
   grad.addColorStop(0, 'rgba(0,0,0,0)');
@@ -3358,13 +3414,12 @@ function drawHUD() {
   drawPixelText('Trophies: ' + trophyCount, W - 140, 5, 11, COL.trophy);
 
   // Mute indicator (top-right)
-  ctx.fillStyle = Audio.isMuted() ? '#FF4444' : '#88CC88';
-  ctx.font = 'bold 10px monospace';
+  ctx.font = '14px monospace';
   ctx.textAlign = 'right';
-  ctx.fillText(Audio.isMuted() ? 'MUTED' : 'SND', W - 10, 15);
+  ctx.fillText(Audio.isMuted() ? '\uD83D\uDD07' : '\uD83C\uDFB5', W - 10, 17);
   ctx.fillStyle = '#666';
   ctx.font = '8px monospace';
-  ctx.fillText('[M]', W - 10, 26);
+  ctx.fillText('[M]', W - 10, 28);
 
 }
 
@@ -3841,8 +3896,20 @@ function drawMenu() {
   ctx.font = '11px monospace';
   ctx.textAlign = 'right';
   ctx.fillText('A Frontier Commons experience', W - 15, 20);
-  ctx.textAlign = 'center';
   ctx.restore();
+
+  // Help button (bottom-right)
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.fillRect(W - 60, H - 50, 50, 28);
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold 13px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('? HELP', W - 35, H - 32);
+  ctx.restore();
+  ctx.textAlign = 'center';
 
   // Small character standing on ground (uses selected skin + gender)
   const skinData = CHARACTER_SKINS[characterSkin];
