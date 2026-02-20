@@ -454,6 +454,9 @@ canvasEl.addEventListener('click', e => {
     } else {
       justPressed['Enter'] = true;
     }
+  } else if (state === STATE.PAUSED) {
+    state = pausedFrom || STATE.PLAYING;
+    pausedFrom = null;
   } else if (state === STATE.END) {
     justPressed['KeyR'] = true;
   }
@@ -3426,7 +3429,7 @@ function drawDecisionPopup() {
   const btnW = pw / 2 - 40, btnH = 60;
   const btnAx = px + 20, btnBx = px + pw / 2 + 20;
   const textA = '[A] ' + q.optionA, textB = '[B] ' + q.optionB;
-  const maxChars = Math.floor(btnW / 8); // ~chars that fit per line at 12px
+  const maxChars = Math.floor(btnW / 10); // conservative estimate for bold 12px monospace
 
   function wrapBtn(text, maxC) {
     const ws = text.split(' ');
@@ -3464,7 +3467,20 @@ function drawDecisionPopup() {
   ctx.fillStyle = '#BBA855';
   ctx.font = 'italic 11px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(currentDecision.verse, px + pw / 2, py + ph - 45);
+  const vMaxW = pw - 40;
+  const vText = currentDecision.verse;
+  if (ctx.measureText(vText).width > vMaxW) {
+    const vWords = vText.split(' ');
+    let vl1 = '', vl2 = '';
+    for (const vw of vWords) {
+      if (!vl2 && ctx.measureText(vl1 + ' ' + vw).width <= vMaxW) vl1 = vl1 ? vl1 + ' ' + vw : vw;
+      else vl2 = vl2 ? vl2 + ' ' + vw : vw;
+    }
+    ctx.fillText(vl1, px + pw / 2, py + ph - 52);
+    ctx.fillText(vl2, px + pw / 2, py + ph - 39);
+  } else {
+    ctx.fillText(vText, px + pw / 2, py + ph - 45);
+  }
 
   // Instruction
   ctx.fillStyle = '#999';
@@ -3948,7 +3964,9 @@ function drawEndScreen() {
   ctx.fillRect(W - 85, pathY - 10, 12, 20);
   ctx.fillStyle = '#FFF';
   ctx.font = '9px monospace';
-  ctx.fillText(gateName, W - 80, pathY + 28);
+  ctx.textAlign = 'right';
+  ctx.fillText(gateName, W - 20, pathY + 28);
+  ctx.textAlign = 'left';
 
   // Heart, Faith & Money bars
   ctx.textAlign = 'left';
