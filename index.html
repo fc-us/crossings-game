@@ -1902,14 +1902,16 @@ function updateMoodParticles() {
   const connPct = heart / 100;
   const idPct = faith / 100;
 
-  // Rain when Connection < 30
-  if (connPct < 0.3 && frameCount % 3 === 0) {
-    const intensity = Math.ceil((0.3 - connPct) / 0.1);
+  // Homesick weather — rain ONLY on the player when Connection < 30
+  if (connPct < 0.3 && frameCount % 2 === 0) {
+    const px = player.x - camera.x + player.w / 2;
+    const intensity = Math.ceil((0.3 - connPct) / 0.08);
+    // Personal rain cloud zone: ~60px wide centered on player
     for (let i = 0; i < intensity; i++) {
       moodParticles.push({
-        x: Math.random() * W, y: -5,
-        vx: -0.5, vy: 3 + Math.random() * 2,
-        life: 80 + Math.random() * 40,
+        x: px + (Math.random() - 0.5) * 70, y: -5,
+        vx: -0.3, vy: 3.5 + Math.random() * 2,
+        life: 90 + Math.random() * 30,
         type: 'rain'
       });
     }
@@ -1938,15 +1940,40 @@ function updateMoodParticles() {
 }
 
 function drawMoodParticles() {
+  if (typeof heart === 'undefined') return;
+  const connPct = heart / 100;
+
+  // Personal rain cloud over player when Connection < 30
+  if (connPct < 0.3 && state === STATE.PLAYING) {
+    const px = player.x - camera.x + player.w / 2;
+    const py = player.y + player.h / 2;
+    const cloudAlpha = (0.3 - connPct) / 0.3; // 0 at 30%, 1 at 0%
+    // Dark cloud
+    ctx.fillStyle = 'rgba(60,65,80,' + (cloudAlpha * 0.7) + ')';
+    drawCloudShape(px, py - 45, 35);
+    ctx.fillStyle = 'rgba(45,50,65,' + (cloudAlpha * 0.5) + ')';
+    drawCloudShape(px + 5, py - 42, 25);
+    // Puddle under player
+    ctx.fillStyle = 'rgba(100,120,160,' + (cloudAlpha * 0.2) + ')';
+    ctx.beginPath();
+    ctx.ellipse(px, GROUND_Y - 2, 20 + connPct * 10, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   for (const p of moodParticles) {
     const alpha = Math.min(1, p.life / 30);
     if (p.type === 'rain') {
-      ctx.strokeStyle = 'rgba(140,160,200,' + (alpha * 0.4) + ')';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(140,170,220,' + (alpha * 0.5) + ')';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(p.x, p.y);
       ctx.lineTo(p.x + p.vx * 3, p.y + p.vy * 3);
       ctx.stroke();
+      // Splash when rain hits ground
+      if (p.y > GROUND_Y - 10 && p.life > 5) {
+        ctx.fillStyle = 'rgba(140,170,220,' + (alpha * 0.3) + ')';
+        ctx.beginPath(); ctx.arc(p.x, GROUND_Y - 4, 2, 0, Math.PI * 2); ctx.fill();
+      }
     } else if (p.type === 'glow') {
       ctx.fillStyle = 'rgba(255,220,100,' + (alpha * 0.35) + ')';
       ctx.beginPath();
