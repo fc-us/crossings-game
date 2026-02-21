@@ -1347,17 +1347,10 @@ function update() {
       }
     } else {
       const q = currentDecision.questions[currentDecision.currentQ];
-      decisionTimer--;
-      // Decisiveness bonus: answer quickly → negative effects reduced (30%-100% scale)
-      const hesitation = 1 - decisionTimer / 660; // 0 = instant, 1 = last second
-      const penalty = 0.3 + 0.7 * hesitation; // 30% penalty if instant, 100% if slow
       function applyEffect(eff) {
-        const h = eff.heart >= 0 ? eff.heart : Math.round(eff.heart * penalty);
-        const f = eff.faith >= 0 ? eff.faith : Math.round(eff.faith * penalty);
-        const m = (eff.money || 0) >= 0 ? (eff.money || 0) : Math.round((eff.money || 0) * penalty);
-        heart = Math.max(0, Math.min(100, heart + h));
-        faith = Math.max(0, Math.min(100, faith + f));
-        money = Math.max(0, Math.min(100, money + m));
+        heart = Math.max(0, Math.min(100, heart + eff.heart));
+        faith = Math.max(0, Math.min(100, faith + eff.faith));
+        money = Math.max(0, Math.min(100, money + (eff.money || 0)));
       }
       const pickA = consumePress('KeyA') || clickedOption === 'A';
       const pickB = consumePress('KeyB') || clickedOption === 'B';
@@ -1379,19 +1372,6 @@ function update() {
         decisions.push({ question: q.question, choice: 'B', text: q.optionB, difficulty: q.difficulty });
         Audio.sfx('decide');
         pendingEcho = { text: q.echoB, timer: 240, choice: 'B' };
-        decisionSlowmo = 45;
-      } else if (decisionTimer <= 0) {
-        const prevH = heart, prevF = faith, prevM = money;
-        heart = Math.max(0, Math.min(100, heart + q.effectS.heart));
-        faith = Math.max(0, Math.min(100, faith + q.effectS.faith));
-        money = Math.max(0, Math.min(100, money + (q.effectS.money || 0)));
-        meterDelta = { heart: heart - prevH, faith: faith - prevF, money: money - prevM, timer: 120 };
-        currentDecision.choices.push('S');
-        decisions.push({ question: q.question, choice: 'S', text: '...silence', difficulty: q.difficulty });
-        silenceCount++;
-        Audio.sfx('silence');
-        screenShake = { frames: 8, intensity: 2 };
-        pendingEcho = { text: q.echoS, timer: 300, choice: 'S' };
         decisionSlowmo = 45;
       }
     }
@@ -1731,25 +1711,16 @@ function update() {
     if (gauntlet.currentTD >= 0 && gauntlet.currentTD < gauntlet.timedDecisions.length) {
       const td = gauntlet.timedDecisions[gauntlet.currentTD];
       if (!td.chosen) {
-        gauntlet.tdTimer--;
         if (consumePress('KeyA')) {
           td.chosen = 'A';
           faith = Math.max(0, faith - 5);
           money = Math.min(100, money + 3);
           gauntlet.currentTD++;
-          gauntlet.tdTimer = gauntlet.currentTD < gauntlet.timedDecisions.length ? gauntlet.timedDecisions[gauntlet.currentTD].timer : 0;
         } else if (consumePress('KeyB')) {
           td.chosen = 'B';
           faith = Math.min(100, faith + 5); heart = Math.min(100, heart + 5);
           money = Math.max(0, money - 3);
           gauntlet.currentTD++;
-          gauntlet.tdTimer = gauntlet.currentTD < gauntlet.timedDecisions.length ? gauntlet.timedDecisions[gauntlet.currentTD].timer : 0;
-        } else if (gauntlet.tdTimer <= 0) {
-          td.chosen = 'A'; // defaults to fear option
-          faith = Math.max(0, faith - 5);
-          money = Math.min(100, money + 3);
-          gauntlet.currentTD++;
-          gauntlet.tdTimer = gauntlet.currentTD < gauntlet.timedDecisions.length ? gauntlet.timedDecisions[gauntlet.currentTD].timer : 0;
         }
       }
     }
@@ -3255,17 +3226,12 @@ function drawGauntletDecisions() {
   const td = gauntlet.timedDecisions[gauntlet.currentTD];
   if (td.chosen) return;
 
-  const timeLeft = gauntlet.tdTimer / td.timer;
   // Decision bar at top
   ctx.fillStyle = 'rgba(0,0,0,0.8)';
   ctx.fillRect(50, 45, W - 100, 55);
-  ctx.strokeStyle = timeLeft > 0.3 ? '#FFD700' : '#FF4444';
+  ctx.strokeStyle = '#FFD700';
   ctx.lineWidth = 2;
   ctx.strokeRect(50, 45, W - 100, 55);
-
-  // Timer bar
-  ctx.fillStyle = timeLeft > 0.3 ? '#FFD700' : '#FF4444';
-  ctx.fillRect(55, 48, (W - 110) * timeLeft, 4);
 
   // Question
   ctx.fillStyle = '#FFF';
@@ -3471,28 +3437,6 @@ function drawDecisionPopup() {
   ctx.lineWidth = 4;
   ctx.strokeRect(px, py, pw, ph);
 
-  // Timer bar — prominent at top with countdown
-  if (decisionEcho.timer <= 0 && decisionTimer > 0) {
-    const timerPct = decisionTimer / 660;
-    const barColor = timerPct < 0.25 ? '#FF4444' : timerPct < 0.5 ? '#FFAA22' : '#44AA44';
-    ctx.fillStyle = '#222';
-    ctx.fillRect(px + 10, py + 6, pw - 70, 10);
-    ctx.fillStyle = barColor;
-    ctx.fillRect(px + 10, py + 6, (pw - 70) * timerPct, 10);
-    // Countdown seconds
-    const secsLeft = Math.ceil(decisionTimer / 60);
-    ctx.fillStyle = timerPct < 0.25 ? '#FF4444' : '#FFF';
-    ctx.font = 'bold 14px monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(secsLeft + 's', px + pw - 15, py + 16);
-    ctx.textAlign = 'center';
-    // Pulse urgency when low
-    if (decisionTimer < 180) {
-      const pulse = Math.sin(frameCount * 0.15) * 0.1 + 0.1;
-      ctx.fillStyle = 'rgba(255,50,50,' + pulse + ')';
-      ctx.fillRect(px, py, pw, ph);
-    }
-  }
 
   // Difficulty badge + question counter
   const diffColors = { Easy: '#44AA44', Hard: '#DD4444' };
@@ -3586,7 +3530,7 @@ function drawDecisionPopup() {
   // Instruction
   ctx.fillStyle = '#999';
   ctx.font = '12px monospace';
-  ctx.fillText('Tap A or B — or let time decide', px + pw / 2, py + ph - 20);
+  ctx.fillText('Choose A or B — take your time', px + pw / 2, py + ph - 20);
 }
 
 // ---- ECHO SCREEN ----
